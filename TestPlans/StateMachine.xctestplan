@@ -1,0 +1,35 @@
+{
+  "configurations" : [
+    {
+      "id" : "991721FE-2578-427F-9D16-90D2281149AD",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : {
+      "targets" : [
+        {
+          "containerPath" : "container:",
+          "identifier" : "StateMachine",
+          "name" : "StateMachine"
+        }
+      ]
+    },
+    "testExecutionOrdering" : "random",
+    "testTimeoutsEnabled" : true
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "StateMachineTests",
+        "name" : "StateMachineTests"
+      }
+    }
+  ],
+  "version" : 1
+}

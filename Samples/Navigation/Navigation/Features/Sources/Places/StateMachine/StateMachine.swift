@@ -5,7 +5,7 @@ public func makeStateMachine(load: Load) -> AsyncStateMachine<PlacesState, Place
     When(state: PlacesAreIdle.self) {
       On(event: DidRequestLoading.self) { _, _ in
         Transition(state: PlacesAreLoading(previous: []))
-        Output(sideEffect: load(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: load(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
     }
 
@@ -18,11 +18,11 @@ public func makeStateMachine(load: Load) -> AsyncStateMachine<PlacesState, Place
     When(state: PlacesAreLoaded.self) {
       On(event: DidRequestLoading.self, guard: { _, event in event.isFullLoading }) { state, _ in
         Transition(state: PlacesAreLoading(previous: state.places))
-        Output(sideEffect: load(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: load(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
 
       On(event: DidRequestLoading.self, guard: { _, event in !event.isFullLoading }) { _, _ in
-        Output(sideEffect: load(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: load(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
 
       On(event: DidSucceedToLoad.self) { _, event in
@@ -37,7 +37,7 @@ public func makeStateMachine(load: Load) -> AsyncStateMachine<PlacesState, Place
     When(state: PlaceIsSelected.self) {
       On(event: DidRequestLoading.self) { state, _ in
         Transition(state: PlacesAreLoading(previous: state.places))
-        Output(sideEffect: load(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: load(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
     }
   }

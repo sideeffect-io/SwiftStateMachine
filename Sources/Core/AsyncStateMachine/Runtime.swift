@@ -32,17 +32,48 @@ actor Runtime<SuperState, SuperEvent> {
     // executing the output's side effect in its dedicated task with the expected priority if any.
     // as we are in an actor, the task will inherit the actor's executor
     let task = Task(priority: output.priority) {
-      let eventStream = await output.sideEffect()
-      for await event in eventStream {
-        await feedback(event)
+      var restartCount = 0
+      while !Task.isCancelled {
+        let eventStream = await output.sideEffect()
+        for await event in eventStream {
+          await feedback(event)
+        }
+
+        if Task.isCancelled {
+          return
+        }
+
+        if let error = eventStream.failure() {
+          if error is CancellationError {
+            return
+          }
+
+          if let event = await output.onFailure?(error) {
+            await feedback(event)
+          }
+
+          guard output.lifecyclePolicy.shouldRestart(
+            after: .failed(error),
+            restartCount: restartCount
+          ) else { return }
+        } else {
+          guard output.lifecyclePolicy.shouldRestart(
+            after: .finished,
+            restartCount: restartCount
+          ) else { return }
+        }
+
+        let nextRestart = restartCount + 1
+        await output.lifecyclePolicy.delay?(nextRestart)
+        restartCount = nextRestart
       }
     }
 
     // resolving the cancellation policy
-    let lifecycle = output.lifecycle ?? Cancel(predicate: { _, _, _ in false })
+    let cancellationPolicy = output.cancellationPolicy ?? Cancel(predicate: { _, _, _ in false })
 
     // storing the task in progress inside our internal storage so we can find it and eventually cancel it later
-    let taskInProgress = TaskInProgress(task: task, lifecycle: lifecycle)
+    let taskInProgress = TaskInProgress(task: task, cancellationPolicy: cancellationPolicy)
     tasksInProgress.update(with: taskInProgress)
 
     // when the task finishes naturally, then it is removed from the storage
@@ -62,7 +93,7 @@ actor Runtime<SuperState, SuperEvent> {
     newState: (any State<SuperState>)?
   ) async {
     for taskInProgress in tasksInProgress
-      where await taskInProgress.lifecycle.predicate(currentState, event, newState)
+      where await taskInProgress.cancellationPolicy.predicate(currentState, event, newState)
     {
       taskInProgress.task.cancel()
       tasksInProgress.remove(taskInProgress)
@@ -92,9 +123,9 @@ actor Runtime<SuperState, SuperEvent> {
       }
     }
 
-    let lifecycle = Cancel<SuperState, SuperEvent>(predicate: { _, _, _ in false })
+    let cancellationPolicy = Cancel<SuperState, SuperEvent>(predicate: { _, _, _ in false })
 
-    let taskInProgress = TaskInProgress(task: task, lifecycle: lifecycle)
+    let taskInProgress = TaskInProgress(task: task, cancellationPolicy: cancellationPolicy)
     tasksInProgress.update(with: taskInProgress)
 
     return Task { [weak self] in
@@ -126,9 +157,9 @@ actor Runtime<SuperState, SuperEvent> {
       }
     }
 
-    let lifecycle = Cancel<SuperState, SuperEvent>(predicate: { _, _, _ in false })
+    let cancellationPolicy = Cancel<SuperState, SuperEvent>(predicate: { _, _, _ in false })
 
-    let taskInProgress = TaskInProgress(task: task, lifecycle: lifecycle)
+    let taskInProgress = TaskInProgress(task: task, cancellationPolicy: cancellationPolicy)
     tasksInProgress.update(with: taskInProgress)
 
     return Task { [weak self] in

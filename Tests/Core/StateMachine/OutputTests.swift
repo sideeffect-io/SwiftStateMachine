@@ -46,7 +46,7 @@ final class OutputTests: XCTestCase {
     // when
     let receivedSequence = await sut.sideEffect()
     var receivedNextEvent = [any Event<MockSuperEvent>]()
-    for try await element in receivedSequence {
+    for await element in receivedSequence {
       receivedNextEvent.append(element)
     }
 
@@ -62,15 +62,15 @@ final class OutputTests: XCTestCase {
     )
   }
 
-  func test_init_withSequence_setsSideEffectAndLifecycle() async throws {
+  func test_init_withSequence_setsSideEffectAndCancellationPolicy() async throws {
     // Given
     sut = Output<MockSuperState, MockSuperEvent>(
       sideEffect: { AsyncNonThrowingSequence<any Event<MockSuperEvent>> { nil } },
-      lifecycle: Cancel(on: LoadingWasRequested.self)
+      cancellationPolicy: Cancel(on: LoadingWasRequested.self)
     )
 
     // when
-    let receivedCancel = sut.lifecycle
+    let receivedCancel = sut.cancellationPolicy
 
     // Then
     let cancel = try XCTUnwrap(receivedCancel)
@@ -82,26 +82,26 @@ final class OutputTests: XCTestCase {
     XCTAssertTrue(
       shouldCancel,
       """
-      Expected predicate to return true when condition set in initializer's lifecycle realized
+      Expected predicate to return true when condition set in initializer's cancellation policy realized
       but got \(shouldCancel) instead.
       """
     )
   }
 
-  func test_init_withSequenceAndClosure_setsSideEffectAndLifecycle() async throws {
+  func test_init_withSequenceAndClosure_setsSideEffectAndCancellationPolicy() async throws {
     let expectedNextEvent = TestedEvent.loadingRequestedWithValue1701
 
     // Given
     sut = Output<MockSuperState, MockSuperEvent>(
       sideEffect: { AsyncNonThrowingSequence { expectedNextEvent } },
-      lifecycle: Cancel(on: LoadingWasRequested.self)
+      cancellationPolicy: Cancel(on: LoadingWasRequested.self)
     )
 
     // when
-    let receivedCancel = sut.lifecycle
+    let receivedCancel = sut.cancellationPolicy
     let receivedSequence = await sut.sideEffect()
     var receivedNextEvent = [any Event<MockSuperEvent>]()
-    for try await element in receivedSequence {
+    for await element in receivedSequence {
       receivedNextEvent.append(element)
     }
 
@@ -116,7 +116,7 @@ final class OutputTests: XCTestCase {
     XCTAssertTrue(
       shouldCancel,
       """
-      Expected predicate to return true when condition set in initializer's lifecycle realized,
+      Expected predicate to return true when condition set in initializer's cancellation policy realized,
       but got \(shouldCancel) instead.
       """
     )
@@ -133,7 +133,7 @@ final class OutputTests: XCTestCase {
     // When
     let receivedSequence = await sut.sideEffect()
     var receivedNextEvent = [any Event<MockSuperEvent>]()
-    for try await element in receivedSequence {
+    for await element in receivedSequence {
       receivedNextEvent.append(element)
     }
 
@@ -155,7 +155,7 @@ final class OutputTests: XCTestCase {
     // When
     let receivedSequence = await sut.sideEffect()
     var receivedNextEvent = [any Event<MockSuperEvent>]()
-    for try await element in receivedSequence {
+    for await element in receivedSequence {
       receivedNextEvent.append(element)
     }
 
@@ -171,15 +171,15 @@ final class OutputTests: XCTestCase {
     )
   }
 
-  func test_init_withSideEffectAndLifecycleWithEvent_setsSideEffectAndLifecycleWithEvent() async throws {
+  func test_init_withSideEffectAndCancellationPolicyWithEvent_setsSideEffectAndCancellationPolicyWithEvent() async throws {
     // Given
     sut = Output<MockSuperState, MockSuperEvent>(
       sideEffect: { TestedEvent.loadingSucceededWithValue1701 },
-      lifecycle: Cancel(on: LoadingWasRequested.self)
+      cancellationPolicy: Cancel(on: LoadingWasRequested.self)
     )
 
     // when
-    let receivedCancel = sut.lifecycle
+    let receivedCancel = sut.cancellationPolicy
 
     // Then
     let cancel = try XCTUnwrap(receivedCancel)
@@ -191,29 +191,29 @@ final class OutputTests: XCTestCase {
     XCTAssertTrue(
       shouldCancel,
       """
-      Expected predicate to return true when condition set in initializer's lifecycle realized,
+      Expected predicate to return true when condition set in initializer's cancellation policy realized,
       but got \(shouldCancel) instead.
       """
     )
   }
 
-  func test_init_withSideEffectAndLifecycleWithEventAndClosure_setsSideEffectAndLifecycleWithClosure(
+  func test_init_withSideEffectAndCancellationPolicyWithEventAndClosure_setsSideEffectAndCancellationPolicyWithClosure(
   ) async throws {
     let expectedNextEvent = TestedEvent.loadingSucceededWithValue1702
 
     // Given
     sut = Output<MockSuperState, MockSuperEvent>(
       sideEffect: { expectedNextEvent },
-      lifecycle: Cancel(on: LoadingWasRequested.self)
+      cancellationPolicy: Cancel(on: LoadingWasRequested.self)
     )
 
     // when
     let receivedSequence = await sut.sideEffect()
     var receivedNextEvent = [any Event<MockSuperEvent>]()
-    for try await element in receivedSequence {
+    for await element in receivedSequence {
       receivedNextEvent.append(element)
     }
-    let receivedCancel = sut.lifecycle
+    let receivedCancel = sut.cancellationPolicy
 
     // Then
     let cancel = try XCTUnwrap(receivedCancel)
@@ -225,7 +225,7 @@ final class OutputTests: XCTestCase {
     XCTAssertTrue(
       shouldCancel,
       """
-      Expected predicate to return true when condition set in initializer's lifecycle realized,
+      Expected predicate to return true when condition set in initializer's cancellation policy realized,
       but got \(shouldCancel) instead.
       """
     )
@@ -240,13 +240,13 @@ final class OutputTests: XCTestCase {
     )
   }
 
-  func test_lifecycleModifier_setsSideEffectAndCancellationPolicy() async throws {
+  func test_cancellationPolicyModifier_setsSideEffectAndCancellationPolicy() async throws {
     // Given
     sut = Output<MockSuperState, MockSuperEvent>(sideEffect: { TestedEvent.loadingSucceededWithValue1701 })
-      .lifecycle(cancel: Cancel(on: LoadingWasRequested.self))
+      .cancellationPolicy(cancel: Cancel(on: LoadingWasRequested.self))
 
     // when
-    let receivedCancel = sut.lifecycle
+    let receivedCancel = sut.cancellationPolicy
 
     // Then
     let cancel = try XCTUnwrap(receivedCancel)
@@ -258,7 +258,7 @@ final class OutputTests: XCTestCase {
     XCTAssertTrue(
       shouldCancel,
       """
-      Expected predicate to return true when condition set in initializer's lifecycle modifier realized,
+      Expected predicate to return true when condition set in initializer's cancellation policy modifier realized,
       but got \(shouldCancel) instead.
       """
     )

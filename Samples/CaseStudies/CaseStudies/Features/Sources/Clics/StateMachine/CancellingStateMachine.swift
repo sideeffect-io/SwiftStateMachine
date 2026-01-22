@@ -20,7 +20,7 @@ func makeCancellingStateMachine(
     ) {
       On(event: DidRequestLoading.self) { _, _ in
         Transition(state: DataIsLoading())
-        Output(sideEffect: load(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: load(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
     }
 
@@ -35,7 +35,7 @@ func makeCancellingStateMachine(
         Transition(state: DataIsLoaded(numberOfLoads: state.numberOfLoads + 1))
       }
       On(event: DidRequestLoading.self) { _, _ in
-        Output(sideEffect: load(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: load(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
       On(event: DidRequestReset.self) { _, _ in
         Transition(state: DataIsIdle())

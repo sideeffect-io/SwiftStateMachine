@@ -6,7 +6,7 @@ public func makeStateMachine(load: Load) -> AsyncStateMachine<PlaceState, PlaceE
     When(states: PlaceIsIdle.self, PlaceIsLoaded.self) {
       On(event: DidRequestLoading.self) { _, event in
         Transition(state: PlaceIsLoading())
-        Output(sideEffect: load(id: event.id), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: load(id: event.id), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
     }
 

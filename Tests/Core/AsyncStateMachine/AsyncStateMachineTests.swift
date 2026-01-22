@@ -1,4 +1,5 @@
 import StateMachineShared
+import StateMachineTest
 import XCTest
 @testable import StateMachineCore
 
@@ -194,7 +195,7 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
               onCancel: { sideEffectWasCancelled.fulfill() },
               resumeWith: { nil }
             )
-          }.lifecycle(cancel: Cancel(whencurrentState: Loading.self, on: ReloadingWasRequested.self))
+          }.cancellationPolicy(cancel: Cancel(whencurrentState: Loading.self, on: ReloadingWasRequested.self))
         }
       }
 
@@ -249,6 +250,99 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
     wait(for: [sideEffectWasCancelled], timeout: 1.0)
     wait(for: [taskIsFinished], timeout: 1.0)
     sut.finish()
+  }
+
+  func test_integration_lifecyclePolicyAndCancellationPolicy_withDsl() async {
+    let loadAttempts = SendableStorage(value: 0)
+    let pollRuns = SendableStorage(value: 0)
+
+    let load = IntegrationLoad { id in
+      let attempt = loadAttempts.apply { current in
+        current += 1
+        return current
+      }
+      if attempt < 3 {
+        throw IntegrationError(attempt: attempt)
+      }
+      return "value-\(id)"
+    }
+
+    let poll = IntegrationPoll {
+      pollRuns.apply { $0 += 1 }
+      return "tick"
+    }
+
+    let clock = IntegrationClock { _ in }
+
+    let stateMachine = StateMachine<IntegrationSuperState, IntegrationEvent>(initial: IntegrationIdle()) {
+      When(states: IntegrationIdle.self, IntegrationFailed.self) {
+        On(event: IntegrationDidRequestLoad.self) { _, event in
+          Transition(state: IntegrationLoading(id: event.id))
+          Output(sideEffect: load(eventId: event.id))
+            .cancellationPolicy(cancel: Cancel(on: IntegrationDidRequestLoad.self))
+            .lifecyclePolicy(.restartOnFailure(maxRestarts: 2, delay: { attempt in
+              await clock.sleep(.milliseconds(1 * attempt))
+            }))
+            .onFailure { error in
+              let attempt = (error as? IntegrationError)?.attempt ?? -1
+              return IntegrationDidFail(message: "attempt-\(attempt)")
+            }
+        }
+      }
+
+      When(state: IntegrationLoading.self) {
+        On(event: IntegrationDidFail.self) { _, event in
+          Transition(state: IntegrationFailed(message: event.message))
+        }
+
+        On(event: IntegrationDidSucceed.self) { _, event in
+          Transition(state: IntegrationLoaded(value: event.value, count: 0))
+          Output(sideEffect: poll())
+            .lifecyclePolicy(.restartOnCompletion(maxRestarts: 2))
+        }
+      }
+
+      When(state: IntegrationFailed.self) {
+        On(event: IntegrationDidFail.self) { _, event in
+          Transition(state: IntegrationFailed(message: event.message))
+        }
+
+        On(event: IntegrationDidSucceed.self) { _, event in
+          Transition(state: IntegrationLoaded(value: event.value, count: 0))
+          Output(sideEffect: poll())
+            .lifecyclePolicy(.restartOnCompletion(maxRestarts: 2))
+        }
+      }
+
+      When(state: IntegrationLoaded.self) {
+        On(event: IntegrationTick.self) { state, _ in
+          Transition(state: IntegrationLoaded(value: state.value, count: state.count + 1))
+        }
+      }
+    }
+
+    let asyncStateMachine = AsyncStateMachine<IntegrationSuperState, IntegrationEvent>(
+      stateMachine: stateMachine
+    )
+
+    await XCTAssert(asyncStateMachine: asyncStateMachine, timeout: .seconds(1)) { assertions in
+      await assertions.assert(state: IntegrationIdle())
+
+      assertions.send(event: IntegrationDidRequestLoad(id: "42"))
+
+      await assertions.assert(state: IntegrationLoading(id: "42"))
+      await assertions.assert(state: IntegrationFailed(message: "attempt-1"))
+      await assertions.assert(state: IntegrationFailed(message: "attempt-2"))
+      await assertions.assert(state: IntegrationLoaded(value: "value-42", count: 0))
+      await assertions.assert(state: IntegrationLoaded(value: "value-42", count: 1))
+      await assertions.assert(state: IntegrationLoaded(value: "value-42", count: 2))
+      await assertions.assert(state: IntegrationLoaded(value: "value-42", count: 3))
+
+      await assertions.assertNoTransition(timeout: .milliseconds(100))
+    }
+
+    loadAttempts.assertEqual(expected: 3)
+    pollRuns.assertEqual(expected: 3)
   }
 
   func test_sendAndWait_whenOutputIsDone_suspendsAndResumes() {
@@ -889,5 +983,105 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
       but got \(String(describing: firstEventCollected.newState)) instead.
       """
     )
+  }
+}
+
+// MARK: - Integration DSL support types
+
+private struct IntegrationSuperState: Equatable, Sendable {
+  let phase: String
+  let count: Int
+  let message: String?
+  let value: String?
+}
+
+private enum IntegrationEvent { }
+
+private struct IntegrationIdle: State, Equatable {
+  var superState: IntegrationSuperState {
+    .init(phase: "idle", count: 0, message: nil, value: nil)
+  }
+}
+
+private struct IntegrationLoading: State, Equatable {
+  let id: String
+  var superState: IntegrationSuperState {
+    .init(phase: "loading", count: 0, message: nil, value: nil)
+  }
+}
+
+private struct IntegrationLoaded: State, Equatable {
+  let value: String
+  let count: Int
+  var superState: IntegrationSuperState {
+    .init(phase: "loaded", count: count, message: nil, value: value)
+  }
+}
+
+private struct IntegrationFailed: State, Equatable {
+  let message: String
+  var superState: IntegrationSuperState {
+    .init(phase: "failed", count: 0, message: message, value: nil)
+  }
+}
+
+private struct IntegrationDidRequestLoad: Event, Equatable {
+  typealias SuperEvent = IntegrationEvent
+  let id: String
+}
+
+private struct IntegrationDidSucceed: Event, Equatable {
+  typealias SuperEvent = IntegrationEvent
+  let value: String
+}
+
+private struct IntegrationDidFail: Event, Equatable {
+  typealias SuperEvent = IntegrationEvent
+  let message: String
+}
+
+private struct IntegrationTick: Event, Equatable {
+  typealias SuperEvent = IntegrationEvent
+}
+
+private struct IntegrationError: Error {
+  let attempt: Int
+}
+
+private struct IntegrationLoad: Sendable {
+  let dependency: @Sendable (String) async throws -> String
+
+  init(dependency: @Sendable @escaping (String) async throws -> String) {
+    self.dependency = dependency
+  }
+
+  func callAsFunction(eventId: String) -> @Sendable () async throws -> (any Event<IntegrationEvent>)? {
+    {
+      let value = try await dependency(eventId)
+      return IntegrationDidSucceed(value: value)
+    }
+  }
+}
+
+private struct IntegrationPoll: Sendable {
+  let dependency: @Sendable () async -> String
+
+  init(dependency: @Sendable @escaping () async -> String) {
+    self.dependency = dependency
+  }
+
+  func callAsFunction() -> @Sendable () async -> (any Event<IntegrationEvent>)? {
+    {
+      _ = await dependency()
+      return IntegrationTick()
+    }
+  }
+}
+
+private struct IntegrationClock {
+  let sleep: @Sendable (Duration) async -> Void
+
+  init(sleep: @Sendable @escaping (Duration) async -> Void) {
+    self.sleep = sleep
   }
 }

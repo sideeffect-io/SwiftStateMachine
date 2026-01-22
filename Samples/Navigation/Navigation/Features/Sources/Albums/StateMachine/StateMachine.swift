@@ -5,7 +5,7 @@ public func makeStateMachine(loadAlbums: LoadAlbums) -> AsyncStateMachine<Albums
     When(states: AlbumsAreIdle.self, AlbumsAreInFailure.self) {
       On(event: DidRequestLoading.self) { _, _ in
         Transition(state: AlbumsAreLoading(previous: []))
-        Output(sideEffect: loadAlbums(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: loadAlbums(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
     }
 
@@ -22,11 +22,11 @@ public func makeStateMachine(loadAlbums: LoadAlbums) -> AsyncStateMachine<Albums
     When(state: AlbumsAreLoaded.self) {
       On(event: DidRequestLoading.self, guard: { _, event in event.isFullLoading }) { state, _ in
         Transition(state: AlbumsAreLoading(previous: state.albums))
-        Output(sideEffect: loadAlbums(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: loadAlbums(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
 
       On(event: DidRequestLoading.self, guard: { _, event in !event.isFullLoading }) { _, _ in
-        Output(sideEffect: loadAlbums(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: loadAlbums(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
 
       On(event: DidSucceedToLoad.self) { _, event in
@@ -41,7 +41,7 @@ public func makeStateMachine(loadAlbums: LoadAlbums) -> AsyncStateMachine<Albums
     When(state: AlbumIsSelected.self) {
       On(event: DidRequestLoading.self) { state, _ in
         Transition(state: AlbumsAreLoading(previous: state.albums))
-        Output(sideEffect: loadAlbums(), lifecycle: Cancel(on: DidRequestLoading.self))
+        Output(sideEffect: loadAlbums(), cancellationPolicy: Cancel(on: DidRequestLoading.self))
       }
     }
   }

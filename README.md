@@ -166,7 +166,7 @@ let stateMachine = StateMachine<FeatureState, FeatureEvent>(initial: DataIsIdle(
   ) {
     On(event: DidRequestLoading.self) { _, event in
       Transition(state: DataIsLoading(id: event.id))
-      Output(sideEffect: load(event.id), lifecycle: Cancel(on: DidRequestLoading.self)) // sets the cancellation policy
+      Output(sideEffect: load(event.id), cancellationPolicy: Cancel(on: DidRequestLoading.self)) // sets the cancellation policy
     }
   }
 
@@ -184,7 +184,27 @@ let stateMachine = StateMachine<FeatureState, FeatureEvent>(initial: DataIsIdle(
     On(event: DidRequestReloading.self) { state, event in
       Transition(state: DataIsLoading(id: state.id)
       Output(priority: .high, sideEffect: load(state.id)) // it is possible to specify the execution priority
-        .lifecycle(cancel: Cancel(whenNewState: DataIsLoaded.self)) // sets the cancellation policy with a "modifier" style
+        .cancellationPolicy(cancel: Cancel(whenNewState: DataIsLoaded.self)) // sets the cancellation policy with a "modifier" style
+    }
+  }
+}
+```
+
+## Output lifecycle policy (restart / supervision)
+
+Outputs can return a single event (or nil) or an AsyncSequence of events. You can use `lifecyclePolicy` to restart a side effect
+when it finishes or fails, and map failures into events with `onFailure`.
+
+```swift
+let stateMachine = StateMachine<FeatureState, FeatureEvent>(initial: DataIsIdle()) {
+  When(state: DataIsIdle.self) {
+    On(event: DidRequestLoading.self) { _, event in
+      Transition(state: DataIsLoading(id: event.id))
+      Output(
+        sideEffect: load(event.id),
+        lifecyclePolicy: .restartOnFailure(maxRestarts: 3),
+        onFailure: { error in DidFailToLoad(error: error) }
+      )
     }
   }
 }

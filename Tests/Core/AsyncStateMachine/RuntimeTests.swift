@@ -86,6 +86,56 @@ final class RuntimeTests: XCTestCase, @unchecked Sendable {
     )
   }
 
+  func test_execute_whenLifecyclePolicyRestartsOnCompletion_restartsSideEffect() async {
+    let runCount = SendableStorage(value: 0)
+    let feedbackCount = SendableStorage(value: 0)
+
+    let output = Output<MockSuperState, MockSuperEvent>(
+      sideEffect: {
+        AsyncStream { continuation in
+          runCount.apply { $0 += 1 }
+          continuation.yield(TestedEvent.loadingSucceededWithValue1701)
+          continuation.finish()
+        }
+      },
+      lifecyclePolicy: .restartOnCompletion(maxRestarts: 1)
+    )
+
+    let removalTask = await sut.execute(
+      output: output,
+      feedback: { _ in feedbackCount.apply { $0 += 1 } }
+    )
+
+    await removalTask.value
+
+    runCount.assertEqual(expected: 2)
+    feedbackCount.assertEqual(expected: 2)
+  }
+
+  func test_execute_whenLifecyclePolicyRestartsOnFailure_emitsFailureEventAndRestarts() async {
+    enum TestError: Error { case failure }
+    let feedbackCount = SendableStorage(value: 0)
+
+    let output = Output<MockSuperState, MockSuperEvent>(
+      sideEffect: {
+        AsyncThrowingStream { continuation in
+          continuation.finish(throwing: TestError.failure)
+        }
+      },
+      lifecyclePolicy: .restartOnFailure(maxRestarts: 1),
+      onFailure: { _ in TestedEvent.loadingFailed }
+    )
+
+    let removalTask = await sut.execute(
+      output: output,
+      feedback: { _ in feedbackCount.apply { $0 += 1 } }
+    )
+
+    await removalTask.value
+
+    feedbackCount.assertEqual(expected: 2)
+  }
+
   func test_cancel_cancelsTasksAndCleansStorage() {
     let sideEffectIsRunning = expectation(description: "The side effect is currently running")
     let sideEffectWasCancelled = expectation(description: "The side effect was cancelled")
@@ -99,7 +149,7 @@ final class RuntimeTests: XCTestCase, @unchecked Sendable {
         onCancel: { sideEffectWasCancelled.fulfill() },
         resumeWith: { nil }
       )
-    }.lifecycle(cancel: Cancel(whencurrentState: Loading.self, on: ReloadingWasRequested.self))
+    }.cancellationPolicy(cancel: Cancel(whencurrentState: Loading.self, on: ReloadingWasRequested.self))
 
     Task {
       await sut.execute(output: output, feedback: { _ in })
@@ -143,7 +193,7 @@ final class RuntimeTests: XCTestCase, @unchecked Sendable {
     wait(for: [tasksAreFinished], timeout: 1.0)
   }
 
-  func test_cancel_whenNoLifecyclePolicy_doesNotCancelTask() {
+  func test_cancel_whenNoCancellationPolicy_doesNotCancelTask() {
     let sideEffectIsRunning = expectation(description: "The side effect is currently running")
     let tasksAreFinished = expectation(description: "All the tasks have finished")
     tasksAreFinished.expectedFulfillmentCount = 2

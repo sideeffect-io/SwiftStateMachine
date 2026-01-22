@@ -716,7 +716,7 @@ extension StateMachineTests {
       """
     )
     let receivedSequence = await receivedOutput?.sideEffect()
-    for try await _ in receivedSequence.unsafelyUnwrapped { }
+    for await _ in receivedSequence.unsafelyUnwrapped { }
 
     transition1IsCalled.assertEqual(expected: false)
     transition2IsCalled.assertEqual(expected: true)
@@ -829,7 +829,7 @@ extension StateMachineTests {
 
     let sequence = await output.sideEffect()
 
-    for try await _ in sequence { }
+    for await _ in sequence { }
     spyOutput.assertEqual(expected: true)
   }
 

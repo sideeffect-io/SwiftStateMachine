@@ -20,6 +20,16 @@ public struct StateMachine<SuperState, SuperEvent>: Sendable {
   /// Creates a Mealy ``StateMachine`` with an initial state.
   /// - Parameter initial: the initial state of the ``StateMachine``
   public init(initial: some State<SuperState>) {
+    id = nil
+    self.initial = initial
+  }
+
+  /// Creates a Mealy ``StateMachine`` with an identifier and an initial state.
+  /// - Parameters:
+  ///   - id: the identifier used to reference this state machine in composite configurations
+  ///   - initial: the initial state of the ``StateMachine``
+  public init<ID>(id: ID.Type, initial: some State<SuperState>) {
+    self.id = ObjectIdentifier(id)
     self.initial = initial
   }
 
@@ -37,8 +47,10 @@ public struct StateMachine<SuperState, SuperEvent>: Sendable {
 
   // MARK: Internal
 
+  let id: ObjectIdentifier?
   let initial: AnyState
   var mealyTable: [TypesIdentifier: [MealyTransitionFunction]] = [:]
+  var compositesByState: [ObjectIdentifier: [AnyCompositeDefinition<SuperState, SuperEvent>]] = [:]
 
   // MARK: - Methods
 

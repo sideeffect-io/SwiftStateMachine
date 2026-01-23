@@ -442,6 +442,45 @@ stateMachine2.connectAsSender(to: mediator, whenCurrentState: DataIsIdle2.self, 
 In this case, when the second state machine will operate the transition `DataIsIdle2 + DidRequestLoading2`, an event `DidRequestLoading`
 will be sent to the first state machine. There are other variations of the `connectAsSender` function.
 
+# Composite state machines (two-child prototype)
+
+You can compose **two child state machines** inside a parent state using the `Composite` DSL. The composite is active only while the parent
+is in the owning state, and you can route events between parent and children and define a join rule.
+
+```swift
+StateMachine<RootState, RootEvent>(initial: RootIdle()) {
+  When(state: RootRunning.self) {
+    Composite {
+      StateMachine<AuthState, AuthEvent>(id: AuthMachine.self, initial: AuthIdle()) {
+        // child auth transitions
+      }
+
+      StateMachine<SyncState, SyncEvent>(id: SyncMachine.self, initial: SyncIdle()) {
+        // child sync transitions
+      }
+    }
+    .on(parentEvent: RootCancellationWasRequested.self) { _, _ in
+      Forward(to: AuthMachine.self, event: AuthCancel())
+      Forward(to: SyncMachine.self, event: SyncCancel())
+    }
+    .on(childEvent: AuthEvent.Success.self) { _, event in
+      Raise(event: RootEvent.auth(event))
+    }
+    .on(childEvent: SyncEvent.Success.self) { _, event in
+      Raise(event: RootEvent.sync(event))
+    }
+    .join(whenChildStates: AuthFinished.self, SyncFinished.self) {
+      Raise(event: RootWasSuccessful())
+    }
+  }
+}
+```
+
+Notes:
+- Child state machines must use `StateMachine(id:initial:)` so they can be addressed by `Forward`.
+- `Composite` must be used inside a `When(state: ...)` with a single state.
+- The join rule is ordered by the two child declarations and fires once per composite activation.
+
 # How to test
 
 To assert that the state machine will emit the expected states given a list of events:

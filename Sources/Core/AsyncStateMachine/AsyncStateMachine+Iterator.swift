@@ -23,6 +23,7 @@ extension AsyncStateMachine {
     public mutating func next() async -> Element? {
       guard !Task.isCancelled else {
         await asyncStateMachine.runtime.cancelAll()
+        await asyncStateMachine.compositeCoordinator?.deactivateAll()
         return nil
       }
 
@@ -42,6 +43,7 @@ extension AsyncStateMachine {
         guard let eventToken = await eventIterator.next() else {
           // no more possible events, the state machine ends
           await asyncStateMachine.runtime.cancelAll()
+          await asyncStateMachine.compositeCoordinator?.deactivateAll()
           return nil
         }
 
@@ -87,6 +89,8 @@ extension AsyncStateMachine {
           initialState: asyncStateMachine.stateMachine.initial
         )
       }
+      await asyncStateMachine.compositeCoordinator?
+        .handleInitialState(state: asyncStateMachine.stateMachine.initial)
     }
 
     private func processNewState(
@@ -97,6 +101,9 @@ extension AsyncStateMachine {
       // cancel the tasks in progress for which the tuple current state/event/new state is a trigger for cancellation
       // the new state can be nil, still we might want to cancel some outputs for the tuple current state / event
       await asyncStateMachine.runtime.cancel(currentState: currentState, event: event, newState: newState)
+
+      await asyncStateMachine.compositeCoordinator?
+        .handleTransition(currentState: currentState, event: event, newState: newState)
 
       guard let newState else { return }
 

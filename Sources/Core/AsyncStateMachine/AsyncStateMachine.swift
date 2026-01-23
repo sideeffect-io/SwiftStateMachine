@@ -28,6 +28,18 @@ public final class AsyncStateMachine<SuperState, SuperEvent>: AsyncSequence, Sen
     onTransitions = SendableStorage(value: [])
     onDeinits = SendableStorage(value: [])
     shouldLog = SendableStorage(value: true)
+
+    if !stateMachine.compositesByState.isEmpty {
+      let sendToParent: @Sendable (any Event<SuperEvent>) -> Void = { [eventStream] event in
+        eventStream.send(EventToken(event: event, continuation: nil))
+      }
+      compositeCoordinator = CompositeCoordinator(
+        sendToParent: sendToParent,
+        compositesByState: stateMachine.compositesByState
+      )
+    } else {
+      compositeCoordinator = nil
+    }
   }
 
   deinit {
@@ -78,6 +90,7 @@ public final class AsyncStateMachine<SuperState, SuperEvent>: AsyncSequence, Sen
   let onTransitions: SendableStorage<[OnTransition]>
   let onDeinits: SendableStorage<[OnDeinit]>
   let shouldLog: SendableStorage<Bool>
+  let compositeCoordinator: CompositeCoordinator<SuperState, SuperEvent>?
 
   // MARK: - Methods
 

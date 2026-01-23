@@ -93,3 +93,8 @@ Don't wait for approval when you need to execute commands to build and test the 
 
 When needed we can use the Cupertino MCP to access the officiel Swift documentation and Apple coding guides.
 
+---
+
+## Composite DSL (two-child prototype)
+
+See `.codex/docs/composite-dsl.md` for a summary of the new Composite DSL, its semantics, and usage examples.

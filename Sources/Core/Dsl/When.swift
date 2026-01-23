@@ -27,10 +27,25 @@ public struct When<SuperState, SuperEvent> {
   ///   - builder: The blocks describing the Mealy transitions
   public init<S: State<SuperState>>(
     state: S.Type,
-    @WhenBuilder<S, SuperState, SuperEvent> builder: () -> [On<S, SuperState, SuperEvent>]
+    @WhenBuilder<S, SuperState, SuperEvent> builder: () -> [WhenComponent<S, SuperState, SuperEvent>]
   ) {
     oneOfStates = OneOfStates(state)
-    let ons = builder()
+    let components = builder()
+    let ons = components.compactMap { component -> On<S, SuperState, SuperEvent>? in
+      if case let .on(on) = component { return on }
+      return nil
+    }
+    let composites = components.compactMap { component -> AnyCompositeDefinition<SuperState, SuperEvent>? in
+      if case let .composite(composite) = component { return composite }
+      return nil
+    }
+    if !composites.isEmpty {
+      precondition(
+        oneOfStates.states.count == 1,
+        "Composite can only be used with a single state in a When block."
+      )
+    }
+    compositeDefinitions = composites
     mealyTransitions = ons.map { on in
       let oneOfEvents = on.oneOfEvents
       let mealyTransition: @Sendable (AnyState, AnyEvent) async
@@ -63,11 +78,26 @@ public struct When<SuperState, SuperEvent> {
   public init(
     @OneOfStatesBuilder<SuperState> _ oneOfStates: () -> OneOfStates<SuperState>,
     @WhenBuilder<any State<SuperState>, SuperState, SuperEvent> transitions: ()
-      -> [On<any State<SuperState>, SuperState, SuperEvent>]
+      -> [WhenComponent<any State<SuperState>, SuperState, SuperEvent>]
   ) {
     let oneOfStates = oneOfStates()
     self.oneOfStates = oneOfStates
-    let ons = transitions()
+    let components = transitions()
+    let ons = components.compactMap { component -> On<any State<SuperState>, SuperState, SuperEvent>? in
+      if case let .on(on) = component { return on }
+      return nil
+    }
+    let composites = components.compactMap { component -> AnyCompositeDefinition<SuperState, SuperEvent>? in
+      if case let .composite(composite) = component { return composite }
+      return nil
+    }
+    if !composites.isEmpty {
+      precondition(
+        oneOfStates.states.count == 1,
+        "Composite can only be used with a single state in a When block."
+      )
+    }
+    compositeDefinitions = composites
     mealyTransitions = ons.map { on in
       let oneOfEvents = on.oneOfEvents
       let mealyTransition: @Sendable (AnyState, AnyEvent) async
@@ -105,11 +135,26 @@ public struct When<SuperState, SuperEvent> {
   public init(
     states: any State<SuperState>.Type...,
     @WhenBuilder<any State<SuperState>, SuperState, SuperEvent> transitions: ()
-      -> [On<any State<SuperState>, SuperState, SuperEvent>]
+      -> [WhenComponent<any State<SuperState>, SuperState, SuperEvent>]
   ) {
     let oneOfStates = OneOfStates(states)
     self.oneOfStates = oneOfStates
-    let ons = transitions()
+    let components = transitions()
+    let ons = components.compactMap { component -> On<any State<SuperState>, SuperState, SuperEvent>? in
+      if case let .on(on) = component { return on }
+      return nil
+    }
+    let composites = components.compactMap { component -> AnyCompositeDefinition<SuperState, SuperEvent>? in
+      if case let .composite(composite) = component { return composite }
+      return nil
+    }
+    if !composites.isEmpty {
+      precondition(
+        oneOfStates.states.count == 1,
+        "Composite can only be used with a single state in a When block."
+      )
+    }
+    compositeDefinitions = composites
     mealyTransitions = ons.map { on in
       let oneOfEvents = on.oneOfEvents
       let mealyTransition: @Sendable (AnyState, AnyEvent) async
@@ -135,4 +180,5 @@ public struct When<SuperState, SuperEvent> {
 
   let oneOfStates: OneOfStates<SuperState>
   let mealyTransitions: [(oneOfEvents: OneOfEvents<SuperEvent>, transitionFunction: MealyTransitionFunction)]
+  let compositeDefinitions: [AnyCompositeDefinition<SuperState, SuperEvent>]
 }

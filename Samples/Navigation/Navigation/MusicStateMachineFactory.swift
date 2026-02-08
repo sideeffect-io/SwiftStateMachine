@@ -8,8 +8,8 @@ import StateMachineDump
 let musicStateMachineFactory = AsyncStateMachineFactory {
   let asyncStateMachine = MusicStateMachine.asyncStateMachine
   asyncStateMachine.connectAsReceiver(to: musicMediator)
-  asyncStateMachine.onTransition { _, _, event, _ in
-    print("----->>>>> Sending Analytics Event: MusicNavigation \(event.description)")
+asyncStateMachine.onLifecycleEvent { event in
+    print("----->>>>> Sending Analytics Event: MusicNavigation \(event)")
   }
 
   #if DEBUG

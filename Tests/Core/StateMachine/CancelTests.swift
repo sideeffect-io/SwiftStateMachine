@@ -19,6 +19,22 @@ final class CancelTests: XCTestCase {
   var sut: Cancel<MockSuperState, MockSuperEvent>!
 
   // MARK: - Methods
+
+  func test_predicate_whenCurrentStateUsesCorrectlyCasedLabel_returnsTrue() async {
+    sut = Cancel<MockSuperState, MockSuperEvent>(
+      whenCurrentState: Loading.self,
+      on: LoadingWasRequested.self
+    )
+
+    let shouldCancel = await sut.predicate(
+      TestedState.loading,
+      TestedEvent.loadingRequestedWithValue1701,
+      TestedState.loaded
+    )
+
+    XCTAssertTrue(shouldCancel)
+  }
+
   func test_predicate_whenExpectedNewState_returnsTrue() async {
     // Given
     sut = Cancel<MockSuperState, MockSuperEvent>(whenNewState: Loaded.self)

@@ -1,6 +1,5 @@
 // swiftlint:disable:this file_name
 
-#if DEBUG
 import StateMachineCore
 import StateMachineShared
 import XCTestDynamicOverlay
@@ -101,4 +100,3 @@ public func XCTAssertNoTransition<SuperState, SuperEvent>(
     )
   }
 }
-#endif

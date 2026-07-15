@@ -1,4 +1,3 @@
-#if DEBUG
 import XCTestDynamicOverlay
 
 public func XCTAssertEqual(
@@ -18,7 +17,6 @@ public func XCTAssertEqual(
     return
   }
 }
-#endif
 
 extension Equatable {
   public func isEqual(_ other: Any) -> Bool {

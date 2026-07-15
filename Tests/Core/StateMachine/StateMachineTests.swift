@@ -40,6 +40,58 @@ final class StateMachineTests: XCTestCase {
       "Expectedi initial state to be \(expected), but got \(String(describing: received)) instead."
     )
   }
+
+  func test_resolveTransition_reportsFirstMatchedRouteDiagnostic() async {
+    sut = sut.when(
+      state: Idle.self,
+      on: LoadingWasRequested.self,
+      synchronously: { _, _ in true },
+      mealyTransition: { _, _ in
+        MealyTransition(transition: Transition(state: Loading()))
+      }
+    )
+
+    let resolved = await sut.resolveTransition(
+      state: TestedState.idle,
+      event: TestedEvent.loadingRequestedWithValue1701
+    )
+
+    XCTAssertNotNil(resolved)
+    XCTAssertEqual(resolved?.diagnostic.declarationOrder, 0)
+    XCTAssertTrue(resolved?.diagnostic.stateTypeName.contains("Idle") == true)
+    XCTAssertTrue(resolved?.diagnostic.eventTypeName.contains("LoadingWasRequested") == true)
+  }
+
+  func test_resolveTransition_reportsDeclarationOrderForCompoundRoutes() async {
+    sut = sut.when(
+      OneOfStates(Idle.self, Loading.self),
+      on: OneOfEvents(LoadingWasRequested.self, LoadingHasSucceeded.self)
+    ) { _, _ in
+      MealyTransition(transition: Transition(state: Loaded(value: 1701)))
+    }
+
+    let idleRequest = await sut.resolveTransition(
+      state: Idle(),
+      event: LoadingWasRequested(id: 1701)
+    )
+    let idleSuccess = await sut.resolveTransition(
+      state: Idle(),
+      event: LoadingHasSucceeded(value: 1701)
+    )
+    let loadingRequest = await sut.resolveTransition(
+      state: Loading(),
+      event: LoadingWasRequested(id: 1701)
+    )
+    let loadingSuccess = await sut.resolveTransition(
+      state: Loading(),
+      event: LoadingHasSucceeded(value: 1701)
+    )
+
+    XCTAssertEqual(idleRequest?.diagnostic.declarationOrder, 0)
+    XCTAssertEqual(idleSuccess?.diagnostic.declarationOrder, 1)
+    XCTAssertEqual(loadingRequest?.diagnostic.declarationOrder, 2)
+    XCTAssertEqual(loadingSuccess?.diagnostic.declarationOrder, 3)
+  }
 }
 
 // MARK: tests for `when(oneOfStates:oneOfEvents:guard:mealyTransition)`

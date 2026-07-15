@@ -12,7 +12,7 @@ extension AsyncStateMachine {
   /// - Returns: The state machine itself
   public func activateDump(
     trackDeinit: Bool = true,
-    dumpMediator: Mediator<DumpEvent> = dedaultDumpMediator
+    dumpMediator: Mediator<DumpEvent> = defaultDumpMediator
   ) -> Self {
     // dump initial state
     onInitialState { stateMachineId, initialState in

@@ -1,4 +1,5 @@
 import StateMachineCore
+import StateMachineShared
 import XCTest
 
 // MARK: - ThroughputMetric
@@ -43,7 +44,7 @@ final class AsyncStateMachineThroughputTests: XCTestCase {
   #if os(macOS)
   func test_throughput_whenSimpleStateMachine_isPerformant() {
     let metric = ThroughputMetric()
-    let sampleTime = 0.1
+    let iterations = 2_000
 
     // Given
     let stateMachine = StateMachine(initial: Idle()) {
@@ -66,32 +67,27 @@ final class AsyncStateMachineThroughputTests: XCTestCase {
 
     measure(metrics: [metric]) {
       let sut = AsyncStateMachine(stateMachine: stateMachine)
-
       let sequenceIsFinished = expectation(description: "The sequence is finished")
+      let receivedStates = SendableStorage(value: 0)
 
-      // When
-      let senderTask = Task {
-        while !Task.isCancelled {
+      let iteratorTask = Task {
+        for await _ in sut {
+          receivedStates.apply { $0 += 1 }
+        }
+        metric.eventCount = receivedStates.get()
+        sequenceIsFinished.fulfill()
+      }
+
+      Task {
+        for _ in 0..<iterations {
           sut.send(event: LoadingWasRequested(id: 1701))
           sut.send(event: LoadingHasSucceeded(value: 1701))
         }
         sut.finish()
       }
 
-      let iterTask = Task {
-        var eventCount = 0
-        for await _ in sut {
-          eventCount += 1
-        }
-        metric.eventCount = eventCount
-        sequenceIsFinished.fulfill()
-      }
-      usleep(UInt32(sampleTime * Double(USEC_PER_SEC)))
-      senderTask.cancel()
-      iterTask.cancel()
-
-      // Then
-      wait(for: [sequenceIsFinished], timeout: sampleTime * 2)
+      wait(for: [sequenceIsFinished], timeout: 5.0)
+      iteratorTask.cancel()
     }
   }
   #endif

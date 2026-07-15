@@ -1,57 +1,44 @@
 import Foundation
 
+/// Supervises the tasks created for state-machine outputs.
+///
+/// This actor owns each output task until the task really exits. Cancelling a
+/// task only requests cancellation: a side effect which deliberately ignores
+/// cancellation remains supervised and therefore cannot be forgotten while it
+/// is still capable of doing work.
 actor Runtime<SuperState, SuperEvent> {
-
-  // MARK: - Lifecycle
-
-  // MARK: Internal
-
   deinit {
-    // the Runtime is dealloc, the related state machine does not exist anymore, we can cancel the tasks (side effects/middlewares)
-    tasksInProgress.forEach { taskInProgress in
-      taskInProgress.task.cancel()
-    }
-    tasksInProgress.removeAll()
+    tasksInProgress.values.forEach { $0.task.cancel() }
   }
 
-  // MARK: - Properties
-
-  // MARK: Internal
-
-  var tasksInProgress = Set<TaskInProgress>()
-
-  // MARK: - Methods
-
-  // MARK: Internal
+  var tasksInProgress: [UUID: TaskInProgress] = [:]
 
   @discardableResult
   func execute(
     output: Output<SuperState, SuperEvent>,
     feedback: @Sendable @escaping (any Event<SuperEvent>) async -> Void
   ) -> Task<Void, Never> {
-    // executing the output's side effect in its dedicated task with the expected priority if any.
-    // as we are in an actor, the task will inherit the actor's executor
-    let task = Task(priority: output.priority) {
+    let id = UUID()
+    let task = Task(priority: output.priority) { [output, feedback] in
       var restartCount = 0
+
       while !Task.isCancelled {
         let eventStream = await output.sideEffect()
         for await event in eventStream {
+          guard !Task.isCancelled else { return }
           await feedback(event)
+          guard !Task.isCancelled else { return }
         }
 
-        if Task.isCancelled {
-          return
-        }
+        guard !Task.isCancelled else { return }
 
         if let error = eventStream.failure() {
-          if error is CancellationError {
-            return
-          }
-
+          guard !(error is CancellationError) else { return }
           if let event = await output.onFailure?(error) {
+            guard !Task.isCancelled else { return }
             await feedback(event)
+            guard !Task.isCancelled else { return }
           }
-
           guard output.lifecyclePolicy.shouldRestart(
             after: .failed(error),
             restartCount: restartCount
@@ -65,26 +52,42 @@ actor Runtime<SuperState, SuperEvent> {
 
         let nextRestart = restartCount + 1
         await output.lifecyclePolicy.delay?(nextRestart)
+        guard !Task.isCancelled else { return }
         restartCount = nextRestart
       }
     }
 
-    // resolving the cancellation policy
-    let cancellationPolicy = output.cancellationPolicy ?? Cancel(predicate: { _, _, _ in false })
+    let cancellationPolicy = output.cancellationPolicy
+      ?? Cancel(predicate: { _, _, _ in false })
+    tasksInProgress[id] = TaskInProgress(
+      id: id,
+      task: task,
+      cancellationPolicy: cancellationPolicy
+    )
 
-    // storing the task in progress inside our internal storage so we can find it and eventually cancel it later
-    let taskInProgress = TaskInProgress(task: task, cancellationPolicy: cancellationPolicy)
-    tasksInProgress.update(with: taskInProgress)
+    return monitor(task: task, id: id)
+  }
 
-    // when the task finishes naturally, then it is removed from the storage
-    return Task { [weak self] in
-      _ = await task.value
-      await self?.removeTaskInProgress(task: taskInProgress)
+  /// Cancels every currently supervised output and waits for actual task exit.
+  /// This is the terminal shutdown primitive used by `finishAndWait()`.
+  func cancelAllAndWait() async {
+    let tasks = Array(tasksInProgress.values)
+    tasks.forEach { $0.task.cancel() }
+    for task in tasks {
+      await task.task.value
+      tasksInProgress[task.id] = nil
     }
   }
 
-  func removeTaskInProgress(task: TaskInProgress) {
-    tasksInProgress.remove(task)
+  /// Waits for the currently supervised tasks without requesting cancellation.
+  /// This is useful for deterministic shutdown tests and for higher-level
+  /// coordinators that have already selected the cancellation policy.
+  func waitForAll() async {
+    let tasks = Array(tasksInProgress.values)
+    for task in tasks {
+      await task.task.value
+      tasksInProgress[task.id] = nil
+    }
   }
 
   func cancel(
@@ -92,19 +95,21 @@ actor Runtime<SuperState, SuperEvent> {
     event: some Event<SuperEvent>,
     newState: (any State<SuperState>)?
   ) async {
-    for taskInProgress in tasksInProgress
-      where await taskInProgress.cancellationPolicy.predicate(currentState, event, newState)
+    // Snapshot before the first suspension point. An output may finish while
+    // its asynchronous cancellation predicate is evaluating, and its monitor
+    // then removes it from the actor-owned dictionary.
+    let tasks = Array(tasksInProgress.values)
+    for task in tasks
+      where await task.cancellationPolicy.predicate(currentState, event, newState)
     {
-      taskInProgress.task.cancel()
-      tasksInProgress.remove(taskInProgress)
+      task.task.cancel()
     }
   }
 
+  /// Requests cancellation but deliberately retains task records until their
+  /// worker exits. Use `cancelAllAndWait()` for a terminal barrier.
   func cancelAll() {
-    tasksInProgress.forEach { taskInProgress in
-      taskInProgress.task.cancel()
-    }
-    tasksInProgress.removeAll()
+    tasksInProgress.values.forEach { $0.task.cancel() }
   }
 
   @discardableResult
@@ -116,22 +121,17 @@ actor Runtime<SuperState, SuperEvent> {
     let task = Task {
       await withTaskGroup(of: Void.self) { group in
         for onInitialState in onInitialStates {
-          group.addTask {
-            await onInitialState(id, initialState)
-          }
+          group.addTask { await onInitialState(id, initialState) }
         }
       }
     }
-
-    let cancellationPolicy = Cancel<SuperState, SuperEvent>(predicate: { _, _, _ in false })
-
-    let taskInProgress = TaskInProgress(task: task, cancellationPolicy: cancellationPolicy)
-    tasksInProgress.update(with: taskInProgress)
-
-    return Task { [weak self] in
-      _ = await task.value
-      await self?.removeTaskInProgress(task: taskInProgress)
-    }
+    let taskID = UUID()
+    tasksInProgress[taskID] = TaskInProgress(
+      id: taskID,
+      task: task,
+      cancellationPolicy: Cancel(predicate: { _, _, _ in false })
+    )
+    return monitor(task: task, id: taskID)
   }
 
   @discardableResult
@@ -146,25 +146,28 @@ actor Runtime<SuperState, SuperEvent> {
       await withTaskGroup(of: Void.self) { group in
         for onTransition in onTransitions {
           group.addTask {
-            await onTransition(
-              id,
-              currentState,
-              event,
-              newState
-            )
+            await onTransition(id, currentState, event, newState)
           }
         }
       }
     }
+    let taskID = UUID()
+    tasksInProgress[taskID] = TaskInProgress(
+      id: taskID,
+      task: task,
+      cancellationPolicy: Cancel(predicate: { _, _, _ in false })
+    )
+    return monitor(task: task, id: taskID)
+  }
 
-    let cancellationPolicy = Cancel<SuperState, SuperEvent>(predicate: { _, _, _ in false })
-
-    let taskInProgress = TaskInProgress(task: task, cancellationPolicy: cancellationPolicy)
-    tasksInProgress.update(with: taskInProgress)
-
-    return Task { [weak self] in
-      _ = await task.value
-      await self?.removeTaskInProgress(task: taskInProgress)
+  private func monitor(task: Task<Void, Never>, id: UUID) -> Task<Void, Never> {
+    Task { [weak self] in
+      await task.value
+      await self?.removeTaskInProgress(id: id)
     }
+  }
+
+  private func removeTaskInProgress(id: UUID) {
+    tasksInProgress[id] = nil
   }
 }

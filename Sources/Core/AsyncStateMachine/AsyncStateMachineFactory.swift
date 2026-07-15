@@ -77,25 +77,34 @@ public final class AsyncStateMachineFactory<SuperState, SuperEvent>: Sendable {
   private static func makeSingletonBuildFunction(
     build: @Sendable @escaping () -> AsyncStateMachine<SuperState, SuperEvent>
   ) -> @Sendable () -> BuiltAsyncStateMachine<SuperState, SuperEvent> {
-    let asyncStateMachineSafeStorage = OSAllocatedUnfairLock<BuiltAsyncStateMachine<SuperState, SuperEvent>?>(
-      initialState: nil
-    )
+    let cell = OnceCell<BuiltAsyncStateMachine<SuperState, SuperEvent>>()
 
     return {
-      guard let builtAsyncStateMachine = asyncStateMachineSafeStorage.withLock({ $0 }) else {
+      cell.getOrCreate {
         let asyncStateMachine = build()
-
-        let builtAsyncStateMachine = (
+        return (
           asyncStateMachine: asyncStateMachine,
           erasedAsyncStateMachine: asyncStateMachine
             .share(replayCount: .max(count: 1))
             .eraseToAsyncNonThrowingSequence()
         )
-        asyncStateMachineSafeStorage.withLock { $0 = builtAsyncStateMachine }
-        return builtAsyncStateMachine
       }
+    }
+  }
+}
 
-      return builtAsyncStateMachine
+/// A synchronous single-flight cell. Construction happens while the lock is
+/// held, so concurrent callers cannot observe or build competing singleton
+/// state machines.
+private final class OnceCell<Value: Sendable>: @unchecked Sendable {
+  private let storage = OSAllocatedUnfairLock<Value?>(initialState: nil)
+
+  func getOrCreate(_ build: @Sendable () -> Value) -> Value {
+    storage.withLock { storedValue in
+      if let storedValue { return storedValue }
+      let builtValue = build()
+      storedValue = builtValue
+      return builtValue
     }
   }
 }

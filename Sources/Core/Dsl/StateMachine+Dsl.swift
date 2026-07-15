@@ -35,35 +35,8 @@ extension StateMachine {
     initial: some State<SuperState>,
     @StateMachineBuilder<SuperState, SuperEvent> builder: () -> [When<SuperState, SuperEvent>]
   ) {
-    id = nil
-    self.initial = initial
-
-    for when in builder() {
-      let oneOfStates = when.oneOfStates
-
-      for mealyTransition in when.mealyTransitions {
-        let oneOfEvents = mealyTransition.oneOfEvents
-
-        // for every combination of state/event types we register the mealy transition in the table
-        for state in oneOfStates.states {
-          for event in oneOfEvents.events {
-            let identifier = TypesIdentifier(lhsIdentifier: state, rhsIdentifier: event)
-
-            let existingTransitions = mealyTable[identifier] ?? []
-            let newTransition = mealyTransition.transitionFunction
-
-            mealyTable[identifier] = existingTransitions + [newTransition]
-          }
-        }
-      }
-
-      for composite in when.compositeDefinitions {
-        for state in oneOfStates.states {
-          let existingComposites = compositesByState[state] ?? []
-          compositesByState[state] = existingComposites + [composite]
-        }
-      }
-    }
+    self.init(initial: initial)
+    self = registering(whens: builder())
   }
 
   /// Creates a ``StateMachine`` from ``When`` building blocks, with an identifier.
@@ -77,34 +50,7 @@ extension StateMachine {
     initial: some State<SuperState>,
     @StateMachineBuilder<SuperState, SuperEvent> builder: () -> [When<SuperState, SuperEvent>]
   ) {
-    self.id = ObjectIdentifier(id)
-    self.initial = initial
-
-    for when in builder() {
-      let oneOfStates = when.oneOfStates
-
-      for mealyTransition in when.mealyTransitions {
-        let oneOfEvents = mealyTransition.oneOfEvents
-
-        // for every combination of state/event types we register the mealy transition in the table
-        for state in oneOfStates.states {
-          for event in oneOfEvents.events {
-            let identifier = TypesIdentifier(lhsIdentifier: state, rhsIdentifier: event)
-
-            let existingTransitions = mealyTable[identifier] ?? []
-            let newTransition = mealyTransition.transitionFunction
-
-            mealyTable[identifier] = existingTransitions + [newTransition]
-          }
-        }
-      }
-
-      for composite in when.compositeDefinitions {
-        for state in oneOfStates.states {
-          let existingComposites = compositesByState[state] ?? []
-          compositesByState[state] = existingComposites + [composite]
-        }
-      }
-    }
+    self.init(id: id, initial: initial)
+    self = registering(whens: builder())
   }
 }

@@ -108,3 +108,35 @@ struct AsyncJustSequence<Element>: AsyncSequence, Sendable {
     Iterator(element)
   }
 }
+
+// MARK: - AsyncThrowingJustSequence
+
+/// A one-element throwing sequence whose operation executes in the consuming
+/// task. Keeping the operation in the iterator (rather than spawning a nested
+/// task inside `AsyncThrowingStream`) gives the output supervisor direct
+/// ownership of cancellation.
+struct AsyncThrowingJustSequence<Element>: AsyncSequence, Sendable {
+  typealias AsyncIterator = Iterator
+
+  let operation: @Sendable () async throws -> Element?
+
+  init(_ operation: @Sendable @escaping () async throws -> Element?) {
+    self.operation = operation
+  }
+
+  func makeAsyncIterator() -> Iterator {
+    Iterator(operation: operation)
+  }
+
+  struct Iterator: AsyncIteratorProtocol {
+    let operation: @Sendable () async throws -> Element?
+    var hasDelivered = false
+
+    mutating func next() async throws -> Element? {
+      guard !Task.isCancelled, !hasDelivered else { return nil }
+      hasDelivered = true
+      let value = try await operation()
+      return Task.isCancelled ? nil : value
+    }
+  }
+}

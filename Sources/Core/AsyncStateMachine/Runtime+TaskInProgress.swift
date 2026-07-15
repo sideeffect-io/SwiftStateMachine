@@ -1,9 +1,9 @@
 import Foundation
 
 extension Runtime {
-  struct TaskInProgress: Hashable {
-    init(task: Task<Void, Never>, cancellationPolicy: Cancel<SuperState, SuperEvent>) {
-      id = UUID()
+  struct TaskInProgress {
+    init(id: UUID, task: Task<Void, Never>, cancellationPolicy: Cancel<SuperState, SuperEvent>) {
+      self.id = id
       self.task = task
       self.cancellationPolicy = cancellationPolicy
     }
@@ -12,15 +12,5 @@ extension Runtime {
     let task: Task<Void, Never>
     let cancellationPolicy: Cancel<SuperState, SuperEvent>
 
-    static func == (
-      lhs: Runtime<SuperState, SuperEvent>.TaskInProgress,
-      rhs: Runtime<SuperState, SuperEvent>.TaskInProgress
-    ) -> Bool {
-      lhs.id == rhs.id
-    }
-
-    func hash(into hasher: inout Hasher) {
-      hasher.combine(id)
-    }
   }
 }

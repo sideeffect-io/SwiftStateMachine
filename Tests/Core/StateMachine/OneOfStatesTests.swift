@@ -59,6 +59,19 @@ final class OneOfStatesTests: XCTestCase {
     XCTAssertEqual(received, expected, "Expected states to be \(expected), but got \(received) instead.")
   }
 
+  func test_init_withDuplicateTypes_deduplicatesWithoutTrapping() {
+    let sut = OneOfStates([
+      Loading.self,
+      Loading.self,
+      Loaded.self,
+    ])
+
+    XCTAssertEqual(
+      sut.states,
+      Set([ObjectIdentifier(Loading.self), ObjectIdentifier(Loaded.self)])
+    )
+  }
+
   func test_contains_whenExpectedStateType_returnsTrue() {
     // Given
     let sut = OneOfStates([

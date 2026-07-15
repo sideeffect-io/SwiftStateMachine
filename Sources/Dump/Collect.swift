@@ -1,9 +1,17 @@
+import Foundation
 import os
 import StateMachineCore
 
-let collectTaskStorage = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+private struct CollectSession: Sendable {
+  let task: Task<Void, Never>
+  let dumpStateMachineID: UUID
+  let dumpMediator: Mediator<DumpEvent>
+}
+
+private let collectSessionStorage = OSAllocatedUnfairLock<CollectSession?>(initialState: nil)
+private let collectLifecycleLock = OSAllocatedUnfairLock<Void>(initialState: ())
 var collectTask: Task<Void, Never>? {
-  collectTaskStorage.withLock { $0 }
+  collectSessionStorage.withLock { $0?.task }
 }
 
 /// Starts collecting all the tracked state machine's states.
@@ -16,21 +24,42 @@ var collectTask: Task<Void, Never>? {
 ///   By default we will use an internal global ``Mediator``.
 public func startCollecting(
   dumpStateMachine: AsyncStateMachine<DumpState, DumpEvent> = defaultDumpStateMachine,
-  dumpMediator: Mediator<DumpEvent> = dedaultDumpMediator
+  dumpMediator: Mediator<DumpEvent> = defaultDumpMediator
 ) {
-  dumpStateMachine.connectAsReceiver(to: dumpMediator)
-  let task = Task {
-    for await _ in dumpStateMachine { }
-  }
+  collectLifecycleLock.withLock { _ in
+    let previousSession = collectSessionStorage.withLock { session -> CollectSession? in
+      defer { session = nil }
+      return session
+    }
+    previousSession?.task.cancel()
+    if let previousSession {
+      previousSession.dumpMediator.unregisterReceiver(id: previousSession.dumpStateMachineID)
+    }
 
-  collectTaskStorage.withLock {
-    $0 = task
+    dumpStateMachine.connectAsReceiver(to: dumpMediator)
+    let task = Task {
+      for await _ in dumpStateMachine { }
+    }
+    collectSessionStorage.withLock { session in
+      session = CollectSession(
+        task: task,
+        dumpStateMachineID: dumpStateMachine.id,
+        dumpMediator: dumpMediator
+      )
+    }
   }
 }
 
 /// Stop collecting all the tracked state machine's states.
 public func stopCollecting() {
-  collectTaskStorage.withLock {
-    $0?.cancel()
+  collectLifecycleLock.withLock { _ in
+    let session = collectSessionStorage.withLock { session -> CollectSession? in
+      defer { session = nil }
+      return session
+    }
+    session?.task.cancel()
+    if let session {
+      session.dumpMediator.unregisterReceiver(id: session.dumpStateMachineID)
+    }
   }
 }

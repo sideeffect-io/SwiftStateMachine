@@ -46,6 +46,19 @@ public struct Cancel<SuperState, SuperEvent>: Sendable {
     }
   }
 
+  /// Creates a cancellation policy for a current-state and event pair.
+  ///
+  /// This is the correctly cased spelling of the long-standing
+  /// `whencurrentState` label. The original initializer remains available for
+  /// source compatibility.
+  public init<S: State<SuperState>, E: Event<SuperEvent>>(
+    whenCurrentState state: S.Type,
+    on event: E.Type,
+    predicate: (@Sendable (S, E, (any State<SuperState>)?) async -> Bool)? = nil
+  ) {
+    self.init(whencurrentState: state, on: event, predicate: predicate)
+  }
+
   /// Creates a ``Cancel`` policy where the cancellation is confirmed when the new state is of the expected types
   /// and the predicate (if any) is fulfilled.
   /// - Parameters:

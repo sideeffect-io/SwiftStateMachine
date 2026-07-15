@@ -89,6 +89,31 @@ final class AsyncStateMachineFactoryTests: XCTestCase {
     )
   }
 
+  func test_init_whenSingletonLifecycle_isSingleFlightUnderConcurrentBuilds() async {
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let factory = AsyncStateMachineFactory<MockSuperState, MockSuperEvent>(lifecycle: .singleton) {
+      calls.withLock { $0 += 1 }
+      return AsyncStateMachine(initial: Idle()) { }
+    }
+    sut = factory
+
+    let ids = await withTaskGroup(of: UUID.self, returning: [UUID].self) { group in
+      for _ in 0..<32 {
+        group.addTask {
+          factory.build().asyncStateMachine.id
+        }
+      }
+      var ids: [UUID] = []
+      for await id in group {
+        ids.append(id)
+      }
+      return ids
+    }
+
+    XCTAssertEqual(calls.withLock { $0 }, 1)
+    XCTAssertEqual(Set(ids).count, 1)
+  }
+
   func test_init_whenSingletonLifecycle_returnsSharedAsyncStateMachine_andReplaysLastState() async {
     let expectedInitialState = Idle()
     let expectedLoadingState = Loading()

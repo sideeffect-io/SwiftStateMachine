@@ -11,8 +11,7 @@ public struct Output<SuperState, SuperEvent>: Sendable {
 
   typealias EventStream = SupervisedSequence<any Event<SuperEvent>>
 
-  /// Creates an ``Output`` from a side effect function that returns a stream of ``Event``. A cancellation policy can be provided.
-  /// The ``Output`` can emit a stream of ``Event`` in the long run.
+  /// Creates an ``Output`` from a side effect function that returns an erased stream of ``Event``.
   /// - Parameters:
   ///   - priority: the priority used by the supporting Task. If nil, the priority will be inherited from the parent task
   ///   - sideEffect: the closure that performs the ``Output`` business and sends events over time
@@ -30,6 +29,32 @@ public struct Output<SuperState, SuperEvent>: Sendable {
       sideEffect: {
         let sequence = await sideEffect()
         return Self.makeSupervisedSequence(from: sequence)
+      },
+      cancellationPolicy: cancellationPolicy,
+      lifecyclePolicy: lifecyclePolicy,
+      onFailure: onFailure
+    )
+  }
+
+  /// Creates an ``Output`` from a side effect function that returns a concrete stream of events.
+  ///
+  /// Concrete event values are erased internally. The existing existential overload is favored
+  /// when a caller already produces `any Event<SuperEvent>` values.
+  @_disfavoredOverload
+  public init<S: AsyncSequence>(
+    priority: TaskPriority? = nil,
+    sideEffect: @Sendable @escaping () async -> S,
+    cancellationPolicy: Cancel<SuperState, SuperEvent>? = nil,
+    lifecyclePolicy: LifecyclePolicy = .none,
+    onFailure: (@Sendable (Error) async -> (any Event<SuperEvent>)?)? = nil
+  ) where S: Sendable, S.Element: Event, S.Element.SuperEvent == SuperEvent {
+    self.init(
+      priority: priority,
+      sideEffect: {
+        let sequence = await sideEffect()
+        return Self.makeSupervisedSequence(
+          from: EventErasedSequence<S, SuperEvent>(base: sequence)
+        )
       },
       cancellationPolicy: cancellationPolicy,
       lifecyclePolicy: lifecyclePolicy,
@@ -81,18 +106,7 @@ public struct Output<SuperState, SuperEvent>: Sendable {
     self.init(
       priority: priority,
       sideEffect: {
-        SupervisedSequence(base: AsyncThrowingStream { continuation in
-          Task {
-            do {
-              if let event = try await sideEffect() {
-                continuation.yield(event)
-              }
-              continuation.finish()
-            } catch {
-              continuation.finish(throwing: error)
-            }
-          }
-        })
+        SupervisedSequence(base: AsyncThrowingJustSequence(sideEffect))
       },
       cancellationPolicy: cancellationPolicy,
       lifecyclePolicy: lifecyclePolicy,
@@ -166,5 +180,27 @@ public struct Output<SuperState, SuperEvent>: Sendable {
     from sequence: S
   ) -> SupervisedSequence<S.Element> where S: Sendable {
     SupervisedSequence(base: sequence)
+  }
+}
+
+// MARK: - EventErasedSequence
+
+private struct EventErasedSequence<Base: AsyncSequence, SuperEvent>: AsyncSequence, Sendable
+  where Base: Sendable, Base.Element: Event, Base.Element.SuperEvent == SuperEvent
+{
+  typealias Element = any Event<SuperEvent>
+
+  let base: Base
+
+  func makeAsyncIterator() -> Iterator {
+    Iterator(base: base.makeAsyncIterator())
+  }
+
+  struct Iterator: AsyncIteratorProtocol {
+    var base: Base.AsyncIterator
+
+    mutating func next() async throws -> Element? {
+      try await base.next()
+    }
   }
 }

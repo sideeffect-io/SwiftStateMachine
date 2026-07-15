@@ -175,6 +175,7 @@ final class RuntimeTests: XCTestCase, @unchecked Sendable {
         event: TestedEvent.reloadingRequestedWithValue1701,
         newState: TestedState.loaded
       )
+      await sut.waitForAll()
       let tasksInProgressAfterCancel = await sut.tasksInProgress.count
       let expectedNumberOfTasksInProgressAfterCancel = 0
       XCTAssertEqual(
@@ -303,7 +304,7 @@ final class RuntimeTests: XCTestCase, @unchecked Sendable {
 
     // When
     Task {
-      await sut.cancelAll()
+      await sut.cancelAllAndWait()
       let tasksInProgress = await sut.tasksInProgress
 
       let numberOfTasksInProgress = tasksInProgress.count

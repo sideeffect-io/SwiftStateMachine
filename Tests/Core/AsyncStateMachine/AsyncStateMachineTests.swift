@@ -43,6 +43,7 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
           Transition(state: expectedLoadedState)
         }
       }
+
     }
 
     // When
@@ -416,6 +417,66 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
     task.cancel()
   }
 
+  func test_cancellingSendAndWait_endsOnlyTheCallersWait() async {
+    let outputStarted = expectation(description: "The output started")
+    let outputCancelled = expectation(description: "The output was cancelled during terminal shutdown")
+    let callerReturned = expectation(description: "The cancelled caller returned without waiting for the output")
+
+    sut = AsyncStateMachine<MockSuperState, MockSuperEvent>(initial: Idle()) {
+      When(state: Idle.self) {
+        On(event: LoadingWasRequested.self) { _, _ in
+          Transition(state: Loading())
+          Output {
+            await suspendedSideEffect(
+              onSuspended: { outputStarted.fulfill() },
+              onCancel: { outputCancelled.fulfill() },
+              resumeWith: { nil }
+            )
+          }
+        }
+      }
+    }
+
+    let sendTask = Task {
+      await self.sut.sendAndWait(event: LoadingWasRequested(id: 1701))
+      callerReturned.fulfill()
+    }
+
+    await fulfillment(of: [outputStarted], timeout: 1.0)
+    sendTask.cancel()
+    await fulfillment(of: [callerReturned], timeout: 1.0)
+
+    XCTAssertTrue(sut.lastKnownState is Loading)
+    await sut.finishAndWait()
+    await fulfillment(of: [outputCancelled], timeout: 1.0)
+  }
+
+  func test_sendBeforeObservation_processesCommandsAndBuffersStates() async {
+    sut = AsyncStateMachine<MockSuperState, MockSuperEvent>(initial: Idle()) {
+      When(state: Idle.self) {
+        On(event: LoadingWasRequested.self) { _, _ in
+          Transition(state: Loading())
+        }
+      }
+    }
+
+    await sut.sendAndWait(
+      event: LoadingWasRequested(id: 1701),
+      until: .transitionCommitted
+    )
+
+    XCTAssertTrue(sut.lastKnownState is Loading)
+
+    var iterator = sut.makeAsyncIterator()
+    let initial = await iterator.next()
+    let loading = await iterator.next()
+    XCTAssertTrue(initial is Idle)
+    XCTAssertTrue(loading is Loading)
+    await sut.finishAndWait()
+    let finished = await iterator.next()
+    XCTAssertNil(finished)
+  }
+
   func test_send_eventWithAssociatedTransition_executesTransition() async {
     typealias OnTransitionValues = (
       currentState: any State<MockSuperState>,
@@ -547,11 +608,10 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
     )
   }
 
-  func test_finish_whenTaskCancelled_endsStreamAndCancelsTasks() {
+  func test_cancellingStateObservation_doesNotCancelRunningOutput() async {
     let sideEffectIsRunning = expectation(description: "The side effect is currently running")
     let sideEffectWasCancelled = expectation(description: "The side effect was cancelled")
     let firstTaskIsFinished = expectation(description: "The first task has finished")
-    let secondTaskIsFinished = expectation(description: "The second task has finished")
 
     let expectedInitialState = TestedState.idle
     let expectedLoadingState = TestedState.loading
@@ -623,35 +683,21 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
 
     sut.send(event: TestedEvent.loadingRequestedWithValue1701)
 
-    wait(
-      for: [
-        sideEffectIsRunning,
-      ],
-      timeout: 1.0
-    )
+    await fulfillment(of: [sideEffectIsRunning], timeout: 1.0)
 
     // When
     task.cancel()
 
-    // Then
-    wait(
-      for: [
-        sideEffectWasCancelled,
-      ],
-      timeout: 1.0
-    )
-    wait(for: [firstTaskIsFinished], timeout: 1.0)
+    // Observation cancellation is intentionally independent from the command
+    // runtime. The output remains supervised until a state-machine cancellation
+    // policy or terminal finish requests its cancellation.
+    await fulfillment(of: [firstTaskIsFinished], timeout: 1.0)
+    let runningTaskCount = await sut.runtime.tasksInProgress.count
+    XCTAssertEqual(runningTaskCount, 1)
 
-    // Then the state machine continues with a consecutive task
-    sut.send(event: TestedEvent.loadingSucceededWithValue1701)
-    Task {
-      var iterator = sut.makeAsyncIterator()
-      let element = await iterator.next()
-      XCTAssertEqual(anyLhs: element!, anyRhs: expectedLoadedState)
-      secondTaskIsFinished.fulfill()
-    }
+    sut.finish()
+    await fulfillment(of: [sideEffectWasCancelled], timeout: 1.0)
 
-    wait(for: [secondTaskIsFinished], timeout: 1.0)
   }
 
   func test_finish_endsStreamAndCancelsTasks() {
@@ -747,6 +793,51 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
     )
   }
 
+  func test_finishAndWait_waitsForAnUncooperativeOutputToActuallyExit() async {
+    let outputStarted = expectation(description: "The output started")
+    let cancellationRequested = expectation(description: "The output received a cancellation request")
+    let continuation = SendableStorage<UnsafeContinuation<Void, Never>?>(value: nil)
+    let didFinish = SendableStorage(value: false)
+
+    let sideEffect: @Sendable () async -> (any Event<MockSuperEvent>)? = {
+      await withTaskCancellationHandler(operation: {
+        await withUnsafeContinuation { (continuationToResume: UnsafeContinuation<Void, Never>) in
+          continuation.set(value: continuationToResume)
+          outputStarted.fulfill()
+        }
+      }, onCancel: {
+        // Deliberately do not resume: this models a side effect that only
+        // exits after an external resource acknowledges shutdown.
+        cancellationRequested.fulfill()
+      })
+      return nil
+    }
+
+    sut = AsyncStateMachine<MockSuperState, MockSuperEvent>(initial: Idle()) {
+      When(state: Idle.self) {
+        On(event: LoadingWasRequested.self) { _, _ in
+          Transition(state: Loading())
+          Output(sideEffect: sideEffect)
+        }
+      }
+    }
+
+    sut.send(event: LoadingWasRequested(id: 1701))
+    await fulfillment(of: [outputStarted], timeout: 1.0)
+
+    let finishTask = Task {
+      await self.sut.finishAndWait()
+      didFinish.set(value: true)
+    }
+
+    await fulfillment(of: [cancellationRequested], timeout: 1.0)
+    XCTAssertFalse(didFinish.get())
+
+    continuation.get()?.resume()
+    await finishTask.value
+    XCTAssertTrue(didFinish.get())
+  }
+
   func test_onInitialStates_whenInitialStateIsEmitted_areCalledWithExpectedUUIDAndInitialState() {
     let onInitialStatesWereCalled = expectation(description: "on initial states were called")
     onInitialStatesWereCalled.expectedFulfillmentCount = 2
@@ -814,9 +905,11 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
     task.cancel()
   }
 
-  func test_onDeinits_whenReferenceIsReleased_areCalledWithExpectedUUID() {
+  func test_onDeinits_whenReferenceIsReleased_areCalledWithExpectedUUID() async {
     let receivedUUID1 = SendableStorage<UUID?>(value: nil)
     let receivedUUID2 = SendableStorage<UUID?>(value: nil)
+    let didDeinit = expectation(description: "The ordered deinit callbacks are delivered")
+    didDeinit.expectedFulfillmentCount = 2
 
     sut = AsyncStateMachine(initial: Idle()) { }
     let expectedUUID = sut.id
@@ -824,14 +917,18 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
     // Given
     sut.onDeinit { uuid in
       receivedUUID1.set(value: uuid)
+      didDeinit.fulfill()
     }
 
     sut.onDeinit { uuid in
       receivedUUID2.set(value: uuid)
+      didDeinit.fulfill()
     }
 
     // When
     sut = nil
+
+    await fulfillment(of: [didDeinit], timeout: 1.0)
 
     // Then
     let unwrappedReceivedUUID1 = receivedUUID1.get()!
@@ -866,6 +963,7 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
         }
       }
     }
+    sut.disableLog()
 
     let task = Task {
       for await _ in sut { }
@@ -983,6 +1081,85 @@ final class AsyncStateMachineTests: XCTestCase, @unchecked Sendable {
       but got \(String(describing: firstEventCollected.newState)) instead.
       """
     )
+  }
+
+  func test_lifecycleEvents_areSerializedWhileHandlersForOneEventRunConcurrently() async {
+    let initialHandlersStarted = expectation(description: "Both initial-state handlers began")
+    initialHandlersStarted.expectedFulfillmentCount = 2
+    let transitionHandlerRan = expectation(description: "The transition handler ran after the initial handlers")
+    let gate = AsyncGate()
+    let events = SendableStorage<[String]>(value: [])
+
+    sut = AsyncStateMachine<MockSuperState, MockSuperEvent>(initial: Idle()) {
+      When(state: Idle.self) {
+        On(event: LoadingWasRequested.self) { _, _ in
+          Transition(state: Loading())
+        }
+      }
+    }
+
+    sut.onInitialState { _, _ in
+      events.apply { $0.append("initial-one-began") }
+      initialHandlersStarted.fulfill()
+      await gate.wait()
+      events.apply { $0.append("initial-one-ended") }
+    }
+    sut.onInitialState { _, _ in
+      events.apply { $0.append("initial-two-began") }
+      initialHandlersStarted.fulfill()
+      await gate.wait()
+      events.apply { $0.append("initial-two-ended") }
+    }
+    sut.onTransition { _, _, _, _ in
+      events.apply { $0.append("transition") }
+      transitionHandlerRan.fulfill()
+    }
+
+    var iterator = sut.makeAsyncIterator()
+    _ = await iterator.next()
+    await fulfillment(of: [initialHandlersStarted], timeout: 1.0)
+    await sut.sendAndWait(
+      event: LoadingWasRequested(id: 1701),
+      until: .transitionCommitted
+    )
+
+    XCTAssertFalse(events.get().contains("transition"))
+
+    await gate.open()
+    await fulfillment(of: [transitionHandlerRan], timeout: 1.0)
+
+    let completedEvents = events.get()
+    let transitionIndex = try! XCTUnwrap(completedEvents.firstIndex(of: "transition"))
+    let initialOneEndIndex = try! XCTUnwrap(completedEvents.firstIndex(of: "initial-one-ended"))
+    let initialTwoEndIndex = try! XCTUnwrap(completedEvents.firstIndex(of: "initial-two-ended"))
+    XCTAssertGreaterThan(transitionIndex, initialOneEndIndex)
+    XCTAssertGreaterThan(transitionIndex, initialTwoEndIndex)
+
+    await sut.finishAndWait()
+  }
+}
+
+private actor AsyncGate {
+  private var isOpen = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    guard !isOpen else { return }
+    await withCheckedContinuation { continuation in
+      if isOpen {
+        continuation.resume()
+      } else {
+        waiters.append(continuation)
+      }
+    }
+  }
+
+  func open() {
+    guard !isOpen else { return }
+    isOpen = true
+    let pendingWaiters = waiters
+    waiters.removeAll()
+    pendingWaiters.forEach { $0.resume() }
   }
 }
 

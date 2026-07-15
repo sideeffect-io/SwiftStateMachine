@@ -1,129 +1,184 @@
 import os
 
-final class ShareRuntime<Base: AsyncSequence>: Sendable where Base: Sendable, Base.Element: Sendable {
+/// Owns a shared base iteration independently from individual subscriber
+/// iterators. Subscribers are represented by leases, so abandoning an iterator
+/// removes its channel immediately instead of retaining an unbounded buffer.
+final class ShareRuntime<Base: AsyncSequence>: @unchecked Sendable
+  where Base: Sendable, Base.Element: Sendable
+{
+  typealias Element = Base.Element
 
-  // MARK: - Lifecycle
+  private struct State {
+    var nextID = 0
+    var clients: [Int: AsyncUnicastChannel<Element>] = [:]
+    var replay: [Element] = []
+    var hasStarted = false
+    var isFinished = false
+    var driver: Task<Void, Never>?
+  }
+
+  private let base: Base
+  private let replayCount: ReplayCount
+  private let state = OSAllocatedUnfairLock(initialState: State())
 
   init(base: Base, replayCount: ReplayCount) {
-    stateMachine = OSAllocatedUnfairLock(initialState: ShareStateMachine(base: base, replayCount: replayCount))
-    idCounter = OSAllocatedUnfairLock(initialState: 0)
+    self.base = base
+    self.replayCount = replayCount
   }
 
   deinit {
-    let task = self.stateMachine.withLock { $0.task }
-    task?.cancel()
+    state.withLock { $0.driver?.cancel() }
   }
 
-  // MARK: - Properties
-
-  // MARK: Private
-
-  private let stateMachine: OSAllocatedUnfairLock<ShareStateMachine<Base>>
-  private let idCounter: OSAllocatedUnfairLock<Int>
-
-  // MARK: - Methods
-
-  // MARK: Internal
-
-  func generateId() -> Int {
-    idCounter.withLock { ids in
-      ids += 1
-      return ids
+  func makeClient() -> (id: Int, channel: AsyncUnicastChannel<Element>, lease: ClientLease) {
+    let id = state.withLock { state in
+      state.nextID += 1
+      return state.nextID
     }
+    let channel = AsyncUnicastChannel<Element>()
+    return (id, channel, ClientLease(runtime: self, id: id, channel: channel))
   }
 
-  func next(channelId: Int, channel: AsyncUnicastChannel<Base.Element>) -> Bool {
-    stateMachine.withLock { stateMachine -> Bool in
-      let action = stateMachine.next(channelId: channelId, channel: channel)
-      switch action {
-      case .startTask(let base):
-        self.startTask(stateMachine: &stateMachine, base: base)
-        return true
-      case .waitForChannelNextElement:
-        return true
-      case .finishChannel:
-        channel.finish()
-        return false
-      case .replay(let elements):
-        elements.forEach { channel.send($0) }
-        return true
-      case .replayAndFinish(let elements):
-        elements.forEach { channel.send($0) }
-        channel.finish()
-        return true
-      case .resumeBaseNextContinuationAndWaitForChannelNextElement(let baseContinuation):
-        baseContinuation?.resume()
-        return true
+  /// Registers demand for one client. The lease's cancelled flag is checked on
+  /// both sides of registration, closing cancellation-before-registration races.
+  func request(
+    clientID: Int,
+    channel: AsyncUnicastChannel<Element>,
+    lease: ClientLease
+  ) -> Bool {
+    guard !lease.isEnded else { return false }
+
+    let action = state.withLock { state -> RequestAction in
+      if state.isFinished {
+        return .replayAndFinish(state.replay)
       }
+
+      var replay: [Element] = []
+      if state.clients[clientID] == nil {
+        state.clients[clientID] = channel
+        replay = state.replay
+      }
+
+      if !state.hasStarted {
+        state.hasStarted = true
+        return .start(replay)
+      }
+      return .wait(replay)
+    }
+
+    // A cancellation that won the race before registration is cleaned up by
+    // this second check; one after registration removes the entry in `end()`.
+    guard !lease.isEnded else {
+      remove(clientID: clientID, channel: channel)
+      return false
+    }
+
+    switch action {
+    case .start(let replay):
+      replay.forEach { _ = channel.send($0) }
+      startDriver()
+      return true
+    case .wait(let replay):
+      replay.forEach { _ = channel.send($0) }
+      return true
+    case .replayAndFinish(let replay):
+      replay.forEach { _ = channel.send($0) }
+      channel.finish()
+      return true
     }
   }
 
-  @Sendable
-  func cancel(channelId: Int) {
-    stateMachine.withLock { stateMachine in
-      stateMachine.cancelFromChannel(channelId: channelId)
+  fileprivate func remove(clientID: Int, channel: AsyncUnicastChannel<Element>) {
+    let removed = state.withLock { state -> AsyncUnicastChannel<Element>? in
+      guard let registered = state.clients.removeValue(forKey: clientID) else { return nil }
+      return registered
     }
+    // `removed` is normally `channel`; retain the supplied reference to make
+    // the ownership relationship explicit and finish outside the lock.
+    (removed ?? channel).finish()
   }
 
-  private func startTask(
-    stateMachine: inout ShareStateMachine<Base>,
-    base: Base
-  ) {
-    let task = Task<Void, Never> {
+  private func startDriver() {
+    let driver = Task { [base, weak self] in
       do {
         var iterator = base.makeAsyncIterator()
-        baseLoop: while true {
-          await withUnsafeContinuation { (continuation: UnsafeContinuation<Void, Never>) in
-            self.stateMachine.withLock { stateMachine in
-              let action = stateMachine.baseIsSuspended(continuation: continuation)
-
-              switch action {
-              case .remainSuspended:
-                break
-              case .resume(let continuation):
-                continuation.resume()
-              }
-            }
-          }
-
-          guard let element = try await iterator.next() else {
-            // the base async sequence is finished
-            break baseLoop
-          }
-
-          self.stateMachine.withLock { stateMachine in
-            let action = stateMachine.elementFromBase(element: element)
-
-            switch action {
-            case .send(let channels, let element):
-              channels.forEach { $0.send(element) }
-            }
-          }
-        }
-
-        self.stateMachine.withLock { stateMachine in
-          let action = stateMachine.finishFromBase()
-
-          switch action {
-          case .finishChannels(let channels):
-            channels.forEach { $0.finish() }
-          }
+        while !Task.isCancelled, let element = try await iterator.next() {
+          self?.broadcast(element)
         }
       } catch {
-        // an async state machine sequence cannot fail, so this case CANNOT happen
-        // (in a more generic case where we don't know if the base sequence can fail or not
-        // we should handle the error of course)
-        self.stateMachine.withLock { stateMachine in
-          let action = stateMachine.finishFromBase()
-
-          switch action {
-          case .finishChannels(let channels):
-            channels.forEach { $0.finish() }
-          }
-        }
+        // `share` is intentionally non-throwing for source compatibility.
+        // A failing base is treated as a finished shared sequence.
       }
+      self?.finish()
+    }
+    state.withLock { $0.driver = driver }
+  }
+
+  private func broadcast(_ element: Element) {
+    let clients = state.withLock { state -> [AsyncUnicastChannel<Element>] in
+      guard !state.isFinished else { return [] }
+      switch replayCount {
+      case .unbounded:
+        state.replay.append(element)
+      case .max(0):
+        break
+      case .max(let count):
+        if state.replay.count >= count {
+          state.replay.removeFirst()
+        }
+        state.replay.append(element)
+      }
+      return Array(state.clients.values)
+    }
+    clients.forEach { _ = $0.send(element) }
+  }
+
+  private func finish() {
+    let clients = state.withLock { state -> [AsyncUnicastChannel<Element>] in
+      guard !state.isFinished else { return [] }
+      state.isFinished = true
+      state.driver = nil
+      let clients = Array(state.clients.values)
+      state.clients.removeAll()
+      return clients
+    }
+    clients.forEach { $0.finish() }
+  }
+
+  private enum RequestAction {
+    case start([Element])
+    case wait([Element])
+    case replayAndFinish([Element])
+  }
+
+  final class ClientLease: @unchecked Sendable {
+    private weak var runtime: ShareRuntime?
+    private let clientID: Int
+    private let channel: AsyncUnicastChannel<Element>
+    private let ended = OSAllocatedUnfairLock(initialState: false)
+
+    init(runtime: ShareRuntime, id: Int, channel: AsyncUnicastChannel<Element>) {
+      self.runtime = runtime
+      clientID = id
+      self.channel = channel
     }
 
-    stateMachine.taskIsStarted(task: task)
+    deinit {
+      end()
+    }
+
+    var isEnded: Bool {
+      ended.withLock { $0 }
+    }
+
+    func end() {
+      let shouldEnd = ended.withLock { value in
+        guard !value else { return false }
+        value = true
+        return true
+      }
+      guard shouldEnd else { return }
+      runtime?.remove(clientID: clientID, channel: channel)
+    }
   }
 }

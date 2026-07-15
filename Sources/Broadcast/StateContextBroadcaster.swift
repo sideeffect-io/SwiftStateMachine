@@ -1,17 +1,20 @@
 import Foundation
 
-/// Use the StateContextBroadcaster.stream to iterate on the broadcasted state contexts.
-public struct StateContextBroadcaster {
-
-  /// The stream of the broadcasred state contexts
+/// A receive-only stream of lifecycle contexts emitted by machines that opted
+/// into `activateBroadcast()`.
+public struct StateContextBroadcaster: Sendable {
   public let stream: AsyncStream<StateContext>
-  let id: UUID
-  let monitor: StateContextMonitor
-  let continuation: AsyncStream<StateContext>.Continuation
 
-  /// Call stop to stop monitoring the state changes. This will also allow to deallocate the stream.
+  private let continuation: AsyncStream<StateContext>.Continuation
+
+  init(stream: AsyncStream<StateContext>, continuation: AsyncStream<StateContext>.Continuation) {
+    self.stream = stream
+    self.continuation = continuation
+  }
+
+  /// Stops this subscriber and releases its continuation from the global
+  /// registry. It is safe to call more than once.
   public func stop() {
     continuation.finish()
   }
-
 }

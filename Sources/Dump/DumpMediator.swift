@@ -1,3 +1,6 @@
 import StateMachineCore
 
-public let dedaultDumpMediator = Mediator<DumpEvent>()
+public let defaultDumpMediator = Mediator<DumpEvent>()
+
+@available(*, deprecated, renamed: "defaultDumpMediator")
+public let dedaultDumpMediator = defaultDumpMediator

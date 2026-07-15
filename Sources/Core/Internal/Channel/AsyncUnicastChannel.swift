@@ -1,82 +1,67 @@
+import DequeModule
 import os
-import StateMachineShared
 
-/// An ``AsyncUnicastChannel`` is a type that aims to allow communication between the sync world and a Task under the shape
-/// of an ``AsyncSequence``. It is more or less the equivalent to a Subject in the Combine world.
-/// Elements can be sent to the channel with the `send(_:)` function.
-/// Those elements can be consumed by an iterator of the ``AsyncSequence``. It is close to the definition of an ``AsyncStream``, but
-/// ``AsyncStream`` does not allow an iterator to be cancelled and then a second one to iterate again.
-/// (and we need that because in the context of a `.task {}` modifier in a SwiftUI view, an ``AsyncStateMachine`` might be cancelled - when
-/// the when is removed from the hierarchy - and then the very same ``AsyncStateMachine`` will be reused if the view is displayed again -
-/// typically in a list/detail -).
-/// As this is a unicast channel, only ONE iterator is allowed, which fits our needs since we use it in the ``AsyncStateMachine`` to consume
-/// the events given to the state machine, and ``AsyncStateMachine`` should have only ONE iterator so it can be deterministic
-/// (concurrent transition wise).
-/// @unchecked Sendable is justified by internal locking and the single-iterator invariant.
-/// This type is safe to share across tasks as long as only one iterator is active at a time.
-/// TODO: Replace with a Sendable primitive or actor-based design to remove @unchecked.
+/// A single-consumer asynchronous channel with FIFO buffering.
+///
+/// The channel deliberately permits a new iterator after the previous iterator is
+/// released or cancelled. This is needed by SwiftUI task lifecycles, where an
+/// observation task may disappear while the owner of the channel remains alive.
+/// It is not a multicast sequence: attempting to create two live iterators is a
+/// programming error because doing so would make consumption nondeterministic.
+///
+/// `@unchecked Sendable` is limited to this small synchronization boundary. Every
+/// mutable value, including the suspended continuation and iterator lease, is
+/// accessed under `storage` and continuations are always resumed after the lock has
+/// been released.
 final class AsyncUnicastChannel<Element>: AsyncSequence, @unchecked Sendable where Element: Sendable {
-  // MARK: - Lifecycle
-
-  // MARK: Internal
-
-  init() {
-    stateMachine = SendableStorage(value: UnicastChannelStateMachine())
-    isIteratingStorage = OSAllocatedUnfairLock(initialState: false)
-  }
-
-  // MARK: - Typealiases
-
-  // MARK: Internal
-
-  typealias Element = Element
   typealias AsyncIterator = Iterator
 
-  // MARK: - Properties
+  private struct Storage {
+    var buffered = Deque<Element>()
+    var continuation: CheckedContinuation<Element?, Never>?
+    var isFinished = false
+    var hasIterator = false
+    var onSuspended: (@Sendable () -> Void)?
+  }
 
-  // MARK: Internal
+  private let storage = OSAllocatedUnfairLock(initialState: Storage())
 
-  let stateMachine: SendableStorage<UnicastChannelStateMachine<Element>>
-  let isIteratingStorage: OSAllocatedUnfairLock<Bool>
+  /// Package-internal test and diagnostic probe. It is intentionally
+  /// configuration-independent so Release tests exercise the real lifecycle.
+  var onSuspended: (@Sendable () -> Void)? {
+    get { storage.withLock { $0.onSuspended } }
+    set { storage.withLock { $0.onSuspended = newValue } }
+  }
 
-  #if DEBUG
-  var onSuspended: (@Sendable () -> Void)?
-  #endif
-
-  // MARK: - Methods
-
-  // MARK: Internal
-
-  func send(_ element: Element) {
-    stateMachine.apply { stateMachine in
-      let action = stateMachine.newElement(element)
-
-      switch action {
-      case .none:
-        break
-      case .resumeDownstream(let continuation):
-        continuation.resume(returning: element)
+  @discardableResult
+  func send(_ element: Element) -> Bool {
+    let result = storage.withLock { state -> (accepted: Bool, continuation: CheckedContinuation<Element?, Never>?) in
+      guard !state.isFinished else { return (false, nil) }
+      if let continuation = state.continuation {
+        state.continuation = nil
+        return (true, continuation)
       }
+      state.buffered.append(element)
+      return (true, nil)
     }
+    result.continuation?.resume(returning: element)
+    return result.accepted
   }
 
   func finish() {
-    stateMachine.apply { stateMachine in
-      let action = stateMachine.finish()
-
-      switch action {
-      case .none:
-        break
-      case .resumeDownstream(let continuation):
-        continuation.resume(returning: nil)
-      }
+    let continuation = storage.withLock { state -> CheckedContinuation<Element?, Never>? in
+      guard !state.isFinished else { return nil }
+      state.isFinished = true
+      defer { state.continuation = nil }
+      return state.continuation
     }
+    continuation?.resume(returning: nil)
   }
 
   func makeAsyncIterator() -> Iterator {
-    let canStart = isIteratingStorage.withLock { isIterating in
-      guard !isIterating else { return false }
-      isIterating = true
+    let canStart = storage.withLock { state in
+      guard !state.hasIterator else { return false }
+      state.hasIterator = true
       return true
     }
     precondition(
@@ -84,26 +69,118 @@ final class AsyncUnicastChannel<Element>: AsyncSequence, @unchecked Sendable whe
       "AsyncUnicastChannel allows a single iterator at a time. " +
       "This is required to keep state transitions deterministic."
     )
-    return Iterator(channel: self)
+    return Iterator(channel: self, lease: IterationLease(channel: self))
   }
 
   var queuedElements: any Collection<Element> {
-    stateMachine.apply { $0.queuedElements }
+    storage.withLock { Array($0.buffered) }
   }
 
   var isFinishedWithoutElements: Bool {
-    stateMachine.apply { $0.isFinishedWithoutElements }
+    storage.withLock { $0.isFinished && $0.buffered.isEmpty }
   }
 
   var isFinished: Bool {
-    stateMachine.apply { $0.isFinished }
+    storage.withLock { $0.isFinished }
   }
 
   var hasActiveIterator: Bool {
-    isIteratingStorage.withLock { $0 }
+    storage.withLock { $0.hasIterator }
   }
 
-  func iterationDidFinish() {
-    isIteratingStorage.withLock { $0 = false }
+  private func next() async -> Element? {
+    guard !Task.isCancelled else { return nil }
+
+    return await withTaskCancellationHandler(operation: {
+      await withCheckedContinuation { continuation in
+        let action = storage.withLock { state -> NextAction in
+          // The cancellation handler may have run before this continuation was
+          // registered. Checking inside the same critical section closes that
+          // cancellation-registration race.
+          guard !Task.isCancelled else { return .resume(continuation, nil) }
+
+          if let element = state.buffered.popFirst() {
+            return .resume(continuation, element)
+          }
+          if state.isFinished {
+            return .resume(continuation, nil)
+          }
+
+          precondition(state.continuation == nil, "Invalid channel state: multiple suspended iterators")
+          state.continuation = continuation
+          return .suspend(state.onSuspended)
+        }
+
+        switch action {
+        case .resume(let continuation, let element):
+          continuation.resume(returning: element)
+        case .suspend(let callback):
+          callback?()
+        }
+      }
+    }, onCancel: { [weak self] in
+      self?.cancelSuspendedIteration()
+    })
+  }
+
+  private func cancelSuspendedIteration() {
+    let continuation = storage.withLock { state -> CheckedContinuation<Element?, Never>? in
+      defer { state.continuation = nil }
+      return state.continuation
+    }
+    continuation?.resume(returning: nil)
+  }
+
+  private func releaseIterator() {
+    cancelSuspendedIteration()
+    storage.withLock { $0.hasIterator = false }
+  }
+
+  private enum NextAction {
+    case resume(CheckedContinuation<Element?, Never>, Element?)
+    case suspend((@Sendable () -> Void)?)
+  }
+
+  fileprivate final class IterationLease: @unchecked Sendable {
+    private weak var channel: AsyncUnicastChannel?
+    private let didEnd = OSAllocatedUnfairLock(initialState: false)
+
+    init(channel: AsyncUnicastChannel) {
+      self.channel = channel
+    }
+
+    deinit {
+      end()
+    }
+
+    func end() {
+      let shouldEnd = didEnd.withLock { value in
+        guard !value else { return false }
+        value = true
+        return true
+      }
+      guard shouldEnd else { return }
+      channel?.releaseIterator()
+    }
+  }
+}
+
+extension AsyncUnicastChannel {
+  struct Iterator: AsyncIteratorProtocol {
+    private let channel: AsyncUnicastChannel<Element>
+    private let lease: IterationLease
+
+    fileprivate init(channel: AsyncUnicastChannel<Element>, lease: IterationLease) {
+      self.channel = channel
+      self.lease = lease
+    }
+
+    mutating func next() async -> Element? {
+      let element = await channel.next()
+      if element == nil {
+        lease.end()
+      }
+      return element
+    }
   }
 }

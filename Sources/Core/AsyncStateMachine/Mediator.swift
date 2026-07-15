@@ -35,10 +35,20 @@ public final class Mediator<SuperEvent>: Sendable {
   /// Send an ``Event`` to the state machines registered as a receivers of the ``Mediator``
   /// - Parameter event: The event to send
   public func sendToReceivers(event: some Event<SuperEvent>) {
+    // Copy the routing table before invoking receiver code. A receiver may
+    // deallocate or unregister while handling this event, so user work must
+    // never run while the registry lock is held.
+    let receivers = Array(receiversStorage.get().values)
+    receivers.forEach { $0(event) }
+  }
+
+  /// Stops delivering events to one registered receiver.
+  ///
+  /// This is useful for long-lived mediators whose receiver has an independent
+  /// command runtime and should be detached without being deallocated.
+  public func unregisterReceiver(id: UUID) {
     receiversStorage.apply { receivers in
-      receivers.values.forEach { sendAction in
-        sendAction(event)
-      }
+      receivers.removeValue(forKey: id)
     }
   }
 
@@ -53,9 +63,7 @@ public final class Mediator<SuperEvent>: Sendable {
     }
 
     receiver.onDeinit { [weak self] id in
-      self?.receiversStorage.apply { receivers in
-        receivers.removeValue(forKey: id)
-      }
+      self?.unregisterReceiver(id: id)
     }
 
     return self

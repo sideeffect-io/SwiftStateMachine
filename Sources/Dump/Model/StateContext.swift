@@ -15,11 +15,18 @@ public struct StateContext: Sendable, Equatable {
   /// The instant of creation for the state
   public let timeStamp = Date.now
 
+  // A context remains reflexive even when its state does not conform to
+  // `Equatable`. Distinct non-equatable contexts intentionally remain unequal.
+  private let identity = UUID()
+
   // MARK: - Methods
 
   // MARK: Public
 
   public static func == (lhs: Self, rhs: Self) -> Bool {
+    if lhs.identity == rhs.identity {
+      return true
+    }
     guard
       let lhsEquatable = lhs.state as? any Equatable,
       let rhsEquatable = rhs.state as? any Equatable else

@@ -9,14 +9,6 @@ final class UIStateMachineTests: XCTestCase {
 
   // MARK: - Lifecycle
 
-  @MainActor
-  override func tearDown() {
-    super.tearDown()
-
-    sutFromSuperState = nil
-    sutFromUIState = nil
-  }
-
   // MARK: - Properties
 
   var sutFromSuperState: UIStateMachine<MockSuperState, MockSuperEvent>!

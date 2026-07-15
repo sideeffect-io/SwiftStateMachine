@@ -59,6 +59,19 @@ final class OneOfEventsTests: XCTestCase {
     XCTAssertEqual(received, expected, "Expected events to be \(expected), but got \(received) instead.")
   }
 
+  func test_init_withDuplicateTypes_deduplicatesWithoutTrapping() {
+    sut = OneOfEvents([
+      LoadingWasRequested.self,
+      LoadingWasRequested.self,
+      LoadingHasSucceeded.self,
+    ])
+
+    XCTAssertEqual(
+      sut.events,
+      Set([ObjectIdentifier(LoadingWasRequested.self), ObjectIdentifier(LoadingHasSucceeded.self)])
+    )
+  }
+
   func test_contains_whenExpectedEventType_returnsTrue() {
     // Given
     sut = OneOfEvents(

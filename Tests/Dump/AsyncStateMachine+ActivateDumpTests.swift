@@ -104,9 +104,13 @@ final class AsyncStateMachineActivateDumpTests: XCTestCase {
     let expectedStateMachineId = sut.id
 
     let receivedEvent = SendableStorage<(any Event<DumpEvent>)?>(value: nil)
+    let didReceiveDeinit = expectation(description: "The dump mediator receives ordered deinit")
 
     let sendableBlock: @Sendable (any Event<DumpEvent>) -> Void = { dumpEvent in
-      receivedEvent.set(value: dumpEvent)
+      if dumpEvent is DidObserveDeinit {
+        receivedEvent.set(value: dumpEvent)
+        didReceiveDeinit.fulfill()
+      }
     }
 
     spyDumpMediator.receiversStorage.apply { receiversMap in
@@ -118,6 +122,8 @@ final class AsyncStateMachineActivateDumpTests: XCTestCase {
 
     // When
     sut = nil
+
+    await fulfillment(of: [didReceiveDeinit], timeout: 1.0)
 
     // Then
     XCTAssertEqual(

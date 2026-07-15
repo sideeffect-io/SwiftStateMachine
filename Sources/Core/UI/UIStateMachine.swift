@@ -84,10 +84,10 @@ public final class UIStateMachine<UIState, SuperEvent>: ObservableObject, Sendab
   let uiStateSequence: AsyncNonThrowingSequence<UIState>
   var uiStateSequenceTask: Task<Void, Never>?
 
-  #if DEBUG
+  // Package-internal lifecycle probes used by the UI wrapper tests. Keeping them available in
+  // every build configuration prevents Release tests from exercising a different lifecycle.
   var onStart: (@Sendable () -> Void)?
   var onStop: (@Sendable () -> Void)?
-  #endif
 
   // MARK: - Methods
 
@@ -99,14 +99,10 @@ public final class UIStateMachine<UIState, SuperEvent>: ObservableObject, Sendab
   public func start() {
     guard uiStateSequenceTask == nil else { return }
 
-    #if DEBUG
     onStart?()
-    #endif
 
     uiStateSequenceTask = Task { [weak self] in
-      #if DEBUG
       defer { self?.onStop?() }
-      #endif
       var iterator = self?.uiStateSequence.makeAsyncIterator()
       while let uiState = await iterator?.next() {
         if uiState != self?.state {

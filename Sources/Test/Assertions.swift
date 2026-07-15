@@ -1,4 +1,3 @@
-#if DEBUG
 import Foundation
 import OrderedCollections
 import StateMachineCore
@@ -197,4 +196,3 @@ public final class Assertions<SuperState, SuperEvent>: Sendable {
     }
   }
 }
-#endif

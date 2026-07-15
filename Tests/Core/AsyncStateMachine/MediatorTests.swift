@@ -44,13 +44,14 @@ final class MediatorTests: XCTestCase, @unchecked Sendable {
     // When
     sut.register(receiver: receiver)
 
+    var iterator = receiver.makeAsyncIterator()
+    _ = await iterator.next() // initial state
+
     // Then
     sut.sendToReceivers(event: expectedEvent)
+    let receivedState = await iterator.next()
 
-    var iterator = receiver.eventStream.makeAsyncIterator()
-    let receivedEvent = await iterator.next()!
-
-    XCTAssertEqual(anyLhs: receivedEvent.event, anyRhs: expectedEvent)
+    XCTAssertTrue(receivedState is Loading)
   }
 
   // swiftlint:disable:next function_body_length
@@ -187,12 +188,16 @@ final class MediatorTests: XCTestCase, @unchecked Sendable {
     senderTask.cancel()
   }
 
-  func test_register_whenReceiverWasDeallocated_removeReceiverFromList() {
+  func test_register_whenReceiverWasDeallocated_removeReceiverFromList() async {
+    let receiverWasRemoved = expectation(description: "The receiver is removed after ordered deinit")
     // Given
     sut.register(receiver: receiver)
+    receiver.onDeinit { _ in receiverWasRemoved.fulfill() }
 
     // When
     receiver = nil
+
+    await fulfillment(of: [receiverWasRemoved], timeout: 1.0)
 
     // Then
     let receivers = sut.receiversStorage.get().values

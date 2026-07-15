@@ -77,4 +77,14 @@ final class StateContextTests: XCTestCase {
       "Expected StateContexts to not be equal when having non Equatable states, but received they are equal instead"
     )
   }
+
+  func test_equal_whenComparedWithItselfAndStateIsNotEquatable_returnsTrue() {
+    struct NonEquatableState: State {
+      var superState: NonEquatableState { self }
+    }
+
+    let context = StateContext(stateMachineId: UUID(), state: NonEquatableState())
+
+    XCTAssertEqual(context, context)
+  }
 }

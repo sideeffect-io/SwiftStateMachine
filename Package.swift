@@ -25,7 +25,11 @@ let package = Package(
         "StateMachineDump",
         "StateMachineTest"
       ]
-    )
+    ),
+    .library(name: "StateMachineCore", targets: ["StateMachineCore"]),
+    .library(name: "StateMachineBroadcast", targets: ["StateMachineBroadcast"]),
+    .library(name: "StateMachineDump", targets: ["StateMachineDump"]),
+    .library(name: "StateMachineTest", targets: ["StateMachineTest"])
   ],
   dependencies: [
     .package(url: "https://github.com/pointfreeco/xctest-dynamic-overlay.git", exact: "1.4.2"),
@@ -45,7 +49,7 @@ let package = Package(
     .target(
       name: "StateMachineCore",
       dependencies: [
-        .product(name: "Collections", package: "swift-collections"),
+        .product(name: "DequeModule", package: "swift-collections"),
         "StateMachineShared"
       ],
       path: "Sources/Core",
@@ -62,7 +66,7 @@ let package = Package(
     .target(
       name: "StateMachineDump",
       dependencies: [
-        .product(name: "Collections", package: "swift-collections"),
+        .product(name: "OrderedCollections", package: "swift-collections"),
         "StateMachineCore"
       ],
       path: "Sources/Dump",
@@ -72,6 +76,7 @@ let package = Package(
       name: "StateMachineTest",
       dependencies: [
         .product(name: "XCTestDynamicOverlay", package: "xctest-dynamic-overlay"),
+        .product(name: "OrderedCollections", package: "swift-collections"),
         "StateMachineCore",
         "StateMachineShared"
       ],
@@ -88,6 +93,15 @@ let package = Package(
         "StateMachineTest"
       ],
       path: "Tests",
+      exclude: ["ExternalFixture"],
+      swiftSettings: debugConcurrencySettings
+    ),
+    // Compiles and runs only against the public Core product. This prevents
+    // package-internal tests from masking public API regressions.
+    .testTarget(
+      name: "StateMachineExternalFixtureTests",
+      dependencies: ["StateMachineCore"],
+      path: "Tests/ExternalFixture",
       swiftSettings: debugConcurrencySettings
     )
   ]

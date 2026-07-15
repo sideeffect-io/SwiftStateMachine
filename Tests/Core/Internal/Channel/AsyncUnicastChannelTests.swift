@@ -181,6 +181,26 @@ final class AsyncUnicastChannelTests: XCTestCase, @unchecked Sendable {
     wait(for: [iteration2HasFinished], timeout: 1.0)
   }
 
+  func test_droppingIteratorAfterEarlyBreak_allowsANewIterator() async {
+    sut.send(1)
+
+    do {
+      var iterator = sut.makeAsyncIterator()
+      let firstElement = await iterator.next()
+      XCTAssertEqual(firstElement, 1)
+      // The iterator is intentionally dropped before it receives `nil`.
+    }
+
+    sut.send(2)
+    sut.finish()
+
+    var secondIterator = sut.makeAsyncIterator()
+    let secondElement = await secondIterator.next()
+    let end = await secondIterator.next()
+    XCTAssertEqual(secondElement, 2)
+    XCTAssertNil(end)
+  }
+
   func test_finish_whenIterationIsSuspended_finishesIteration() {
     let iterationHasSuspended = expectation(description: "The iteration has suspended")
     let iterationHasFinished = expectation(description: "The iteration has finished")

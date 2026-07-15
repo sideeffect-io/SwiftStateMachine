@@ -25,6 +25,59 @@ let package = Package(
 - Dependencies are injected per side effect: no global bag of dependencies
 - State machines are not UI related: it works with UIKit or SwiftUI
 
+## Runtime semantics
+
+Import the product that your feature needs. `StateMachineCore` contains the
+DSL and runtime; `StateMachineBroadcast`, `StateMachineDump`, and
+`StateMachineTest` are optional companion products. The `StateMachine` product
+continues to expose the complete bundle for existing integrations.
+
+```swift
+import StateMachineCore
+```
+
+`AsyncStateMachine` executes commands independently from state observation.
+You may send events before creating an iterator; the initial and committed
+states are buffered for the single observer. Iteration is unicast and only
+controls observation, not transition execution or output cancellation.
+
+```swift
+machine.send(event: DidRequestLoading(id: "42"))
+
+// Wait for the output, preserving the original behavior.
+await machine.sendAndWait(event: DidRequestLoading(id: "42"))
+
+// Or wait only until the state transition is committed.
+await machine.sendAndWait(
+  event: DidRequestLoading(id: "42"),
+  until: .transitionCommitted
+)
+
+// Stop accepting new events. This waits until supervised outputs have exited.
+await machine.finishAndWait()
+```
+
+Outputs may return an erased event stream or a concrete stream whose element
+conforms to `Event`; concrete values are erased by the runtime:
+
+```swift
+Output {
+  AsyncStream<DidSucceedToLoad> { continuation in
+    continuation.yield(DidSucceedToLoad(data: data))
+    continuation.finish()
+  }
+}
+```
+
+Lifecycle callbacks are delivered in lifecycle order (`initialState`, then
+transitions). Handlers registered for the same lifecycle event may run
+concurrently. `finish()` drains already accepted commands before terminal
+shutdown; `finishAndWait()` is the explicit completion barrier.
+
+Cancelling a `sendAndWait` caller stops only that caller's wait. Once accepted,
+the command remains ordered in the machine and continues under normal output
+supervision.
+
 ## Contribution
 Contributions are always welcome. To ensure conformance to our [style guidelines](https://touchtunes.atlassian.net/wiki/spaces/PROJECTS/pages/31686967/iOS+Guidelines) and prevent breaking modifications, the project uses specific tooling in the form of linting and formatting tools, as well as git hooks.
 

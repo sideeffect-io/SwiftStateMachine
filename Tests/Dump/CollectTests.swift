@@ -93,10 +93,36 @@ final class CollectTests: XCTestCase, @unchecked Sendable {
     // When
     stopCollecting()
 
-    XCTAssertTrue(
-      collectTask!.isCancelled,
-      "The dump state machine task should be cancelled"
+    XCTAssertNil(collectTask, "The stopped collect task should be released")
+  }
+
+  func test_stopCollecting_unregistersTheDumpStateMachine() async {
+    let firstTransition = expectation(description: "The registered dump state machine received an event")
+    let transitionAfterStop = expectation(description: "No transition is delivered after collection stops")
+    transitionAfterStop.isInverted = true
+    let hasStopped = SendableStorage(value: false)
+
+    sut.onTransition { _, _, _, _ in
+      if hasStopped.get() {
+        transitionAfterStop.fulfill()
+      } else {
+        firstTransition.fulfill()
+      }
+    }
+
+    startCollecting(dumpStateMachine: sut, dumpMediator: mockDumpMediator)
+    mockDumpMediator.sendToReceivers(
+      event: DidObserveTransition(stateMachineId: UUID(), state: Loading())
     )
+    await fulfillment(of: [firstTransition], timeout: 1.0)
+
+    hasStopped.set(value: true)
+    stopCollecting()
+    mockDumpMediator.sendToReceivers(
+      event: DidObserveTransition(stateMachineId: UUID(), state: Loading())
+    )
+
+    await fulfillment(of: [transitionAfterStop], timeout: 0.2)
   }
 }
 

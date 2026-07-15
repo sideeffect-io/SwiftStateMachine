@@ -43,6 +43,24 @@ public struct StateMachine<SuperState, SuperEvent>: Sendable {
   public typealias MealyTransitionFunction = @Sendable (AnyState, AnyEvent) async
     -> MealyTransition<SuperState, SuperEvent>?
 
+  /// Stable metadata for the route selected during transition resolution.
+  public struct RouteDiagnostic: Sendable, Equatable {
+    public let stateTypeName: String
+    public let eventTypeName: String
+    public let declarationOrder: Int
+
+    init(stateTypeName: String, eventTypeName: String, declarationOrder: Int) {
+      self.stateTypeName = stateTypeName
+      self.eventTypeName = eventTypeName
+      self.declarationOrder = declarationOrder
+    }
+  }
+
+  public struct ResolvedTransition: Sendable {
+    public let transition: MealyTransition<SuperState, SuperEvent>
+    public let diagnostic: RouteDiagnostic
+  }
+
   // MARK: - Properties
 
   // MARK: Internal
@@ -50,6 +68,8 @@ public struct StateMachine<SuperState, SuperEvent>: Sendable {
   let id: ObjectIdentifier?
   let initial: AnyState
   var mealyTable: [TypesIdentifier: [MealyTransitionFunction]] = [:]
+  var routeDiagnostics: [TypesIdentifier: [RouteDiagnostic]] = [:]
+  var nextRouteDeclarationOrder = 0
   var compositesByState: [ObjectIdentifier: [AnyCompositeDefinition<SuperState, SuperEvent>]] = [:]
 
   // MARK: - Methods
@@ -202,30 +222,35 @@ public struct StateMachine<SuperState, SuperEvent>: Sendable {
     guard: GuardFunction? = nil,
     mealyTransition: @escaping MealyTransitionFunction
   ) -> Self {
-    var mutableSelf = self
+    register(
+      oneOfStates: oneOfStates,
+      oneOfEvents: oneOfEvents,
+      guard: `guard`,
+      mealyTransition: mealyTransition
+    )
+  }
 
-    // for every combination of state/event types we register the mealy transition in the table
-    oneOfStates.states.forEach { state in
-      oneOfEvents.events.forEach { event in
-        let identifier = TypesIdentifier(lhsIdentifier: state, rhsIdentifier: event)
-
-        let existingTransitions = mutableSelf.mealyTable[identifier] ?? []
-        let newTransition: MealyTransitionFunction = { anyState, anyEvent in
-          guard oneOfStates.contains(state: anyState) else { return nil }
-          guard oneOfEvents.contains(event: anyEvent) else { return nil }
-
-          if let `guard` {
-            guard await `guard`(anyState, anyEvent) else { return nil }
-          }
-
-          return await mealyTransition(anyState, anyEvent)
-        }
-
-        mutableSelf.mealyTable[identifier] = existingTransitions + [newTransition]
-      }
+  /// Registers a pure route without requiring callers to introduce `async`
+  /// into guards or transition factories. Existing asynchronous DSL overloads
+  /// remain the compatibility surface for decisions that really must suspend.
+  public func when<S: State<SuperState>, E: Event<SuperEvent>>(
+    state: S.Type,
+    on event: E.Type,
+    synchronously guard: (@Sendable (S, E) -> Bool)? = nil,
+    mealyTransition: @Sendable @escaping (S, E) -> MealyTransition<SuperState, SuperEvent>
+  ) -> Self {
+    let asynchronousGuard: (@Sendable (S, E) async -> Bool)?
+    if let `guard` {
+      asynchronousGuard = { state, event in `guard`(state, event) }
+    } else {
+      asynchronousGuard = nil
     }
-
-    return mutableSelf
+    return when(
+      state: state,
+      on: event,
+      guard: asynchronousGuard,
+      mealyTransition: { state, event in mealyTransition(state, event) }
+    )
   }
 
   /// Returns the ``MealyTransition`` standing for an optional ``Transition`` and an optional ``Output`` given a ``State`` and an ``Event``.
@@ -239,13 +264,87 @@ public struct StateMachine<SuperState, SuperEvent>: Sendable {
     state: some State<SuperState>,
     event: some Event<SuperEvent>
   ) async -> MealyTransition<SuperState, SuperEvent>? {
+    await resolveTransition(state: state, event: event)?.transition
+  }
+
+  /// Resolves a transition together with metadata identifying the first route
+  /// that matched. This is useful for focused diagnostics without changing the
+  /// first-match semantics of the runtime.
+  public func resolveTransition(
+    state: some State<SuperState>,
+    event: some Event<SuperEvent>
+  ) async -> ResolvedTransition? {
     let identifier = TypesIdentifier(lhsValue: state, rhsValue: event)
     guard let mealyTransitions = mealyTable[identifier] else { return nil }
-    for transition in mealyTransitions {
+    let diagnostics = routeDiagnostics[identifier] ?? []
+    for (index, transition) in mealyTransitions.enumerated() {
       if let result = await transition(state, event), result.isPerformable {
-        return result
+        let diagnostic = diagnostics.indices.contains(index)
+          ? diagnostics[index]
+          : RouteDiagnostic(
+            stateTypeName: String(reflecting: type(of: state)),
+            eventTypeName: String(reflecting: type(of: event)),
+            declarationOrder: index
+          )
+        return ResolvedTransition(transition: result, diagnostic: diagnostic)
       }
     }
     return nil
+  }
+
+  // MARK: Internal route registration
+
+  func registering(whens: [When<SuperState, SuperEvent>]) -> Self {
+    var machine = self
+    for when in whens {
+      for route in when.mealyTransitions {
+        machine = machine.register(
+          oneOfStates: when.oneOfStates,
+          oneOfEvents: route.oneOfEvents,
+          guard: nil,
+          mealyTransition: route.transitionFunction
+        )
+      }
+
+      for composite in when.compositeDefinitions {
+        for state in when.oneOfStates.orderedStates {
+          machine.compositesByState[state, default: []].append(composite)
+        }
+      }
+    }
+    return machine
+  }
+
+  private func register(
+    oneOfStates: OneOfStates<SuperState>,
+    oneOfEvents: OneOfEvents<SuperEvent>,
+    guard: GuardFunction?,
+    mealyTransition: @escaping MealyTransitionFunction
+  ) -> Self {
+    var machine = self
+    for state in oneOfStates.orderedStates {
+      for event in oneOfEvents.orderedEvents {
+        let identifier = TypesIdentifier(lhsIdentifier: state, rhsIdentifier: event)
+        let transition: MealyTransitionFunction = { anyState, anyEvent in
+          guard oneOfStates.contains(state: anyState), oneOfEvents.contains(event: anyEvent) else {
+            return nil
+          }
+          if let `guard`, !(await `guard`(anyState, anyEvent)) {
+            return nil
+          }
+          return await mealyTransition(anyState, anyEvent)
+        }
+        machine.mealyTable[identifier, default: []].append(transition)
+        machine.routeDiagnostics[identifier, default: []].append(
+          RouteDiagnostic(
+            stateTypeName: oneOfStates.typeName(for: state),
+            eventTypeName: oneOfEvents.typeName(for: event),
+            declarationOrder: machine.nextRouteDeclarationOrder
+          )
+        )
+        machine.nextRouteDeclarationOrder += 1
+      }
+    }
+    return machine
   }
 }

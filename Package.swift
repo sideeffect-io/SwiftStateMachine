@@ -11,14 +11,14 @@ let debugConcurrencySettings: [SwiftSetting] = [
 ]
 
 let package = Package(
-  name: "StateMachine",
+  name: "SwiftStateMachine",
   platforms: [
     .iOS(.v16),
     .macOS(.v13)
   ],
   products: [
     .library(
-      name: "StateMachine",
+      name: "SwiftStateMachine",
       targets: [
         "StateMachineBroadcast",
         "StateMachineCore",

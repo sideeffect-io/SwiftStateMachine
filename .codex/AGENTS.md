@@ -1,4 +1,4 @@
-# Agents Overview — Asynchronous state machine Swift Package
+# Agents Overview — SwiftStateMachine
 
 This repository implements a **Swift Package** that allows to create asynchronous Mealy extented state machines.
 Agents working with this repo (AI assistants, automation tools, or new team members) should understand:

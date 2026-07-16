@@ -1,6 +1,6 @@
-# StateMachine
+# SwiftStateMachine
 
-`StateMachine` aims to provide a way to structure an application thanks to state machines. The goal is to identify the states and the side effects involved in each feature and to model them in a consistent and scalable way thanks to a DSL.
+`SwiftStateMachine` aims to provide a way to structure an application thanks to state machines. The goal is to identify the states and the side effects involved in each feature and to model them in a consistent and scalable way thanks to a DSL.
 
 ## Installation
 
@@ -8,10 +8,10 @@
 let package = Package(
   name: "Example",
   dependencies: [
-    .package(name: "StateMachine", path: "../StateMachine")
+    .package(name: "SwiftStateMachine", path: "../SwiftStateMachine")
   ],
   targets: [
-    .target(name: "Example", dependencies: [.product(name: "StateMachine", package: "StateMachine")])
+    .target(name: "Example", dependencies: [.product(name: "SwiftStateMachine", package: "SwiftStateMachine")])
   ]
 )
 ```
@@ -29,7 +29,7 @@ let package = Package(
 
 Import the product that your feature needs. `StateMachineCore` contains the
 DSL and runtime; `StateMachineBroadcast`, `StateMachineDump`, and
-`StateMachineTest` are optional companion products. The `StateMachine` product
+`StateMachineTest` are optional companion products. The `SwiftStateMachine` product
 continues to expose the complete bundle for existing integrations.
 
 ```swift

@@ -89,6 +89,52 @@ Don't wait for approval when you need to execute commands to build and test the 
 
 --
 
+## Contextual State and Event Tokens
+
+`StateType` and `EventType` are the strongly typed public token types for singular
+DSL routes. Applications declare contextual members beside their concrete types:
+
+```swift
+extension StateType where StateValue == TripEditorIsInactive {
+  static var isInactive: Self { .init(TripEditorIsInactive.self) }
+}
+
+extension EventType where EventValue == TripEditorLoadingWasRequested {
+  static var loadingWasRequested: Self { .init(TripEditorLoadingWasRequested.self) }
+}
+```
+
+The canonical singular syntax is:
+
+```swift
+When(state: .isInactive) {
+  On(event: .loadingWasRequested) { state, event in
+    // `state` and `event` retain their concrete types.
+  }
+}
+```
+
+`StateSetType` and `EventSetType` provide super-vocabulary-scoped, intentionally
+type-erased tokens for grouped routes:
+
+```swift
+When(states: .isIdle, .isUnavailable) {
+  On(events: .loadingWasRequested, .retryWasRequested) { state, event in
+    // Grouped routes use the super-state and super-event types.
+  }
+}
+```
+
+The metatype, `states:`, `events:`, and result-builder APIs remain
+source-compatible. Every token overload delegates to the corresponding existing
+metatype implementation so transition-table behavior stays identical.
+
+Tests must cover concrete state/event inference, typed guards, grouped tokens,
+transition-table equivalence, use from an external package target, and legacy
+`.self` compatibility.
+
+--
+
 ## Swift documentation
 
 When needed we can use the Cupertino MCP to access the officiel Swift documentation and Apple coding guides.

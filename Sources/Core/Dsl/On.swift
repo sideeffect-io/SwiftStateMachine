@@ -38,6 +38,19 @@ public struct On<S, SuperState, SuperEvent>: Sendable {
     }
   }
 
+  /// Creates an ``On`` block from a strongly typed event reference.
+  ///
+  /// This preserves the typed guard and transition closures while enabling
+  /// `On(event: .loadingWasRequested)`.
+  public init<E: Event<SuperEvent>>(
+    event: EventType<E>,
+    guard: @Sendable @escaping (S, E) async -> Bool = { _, _ in true },
+    @MealyTransitionBuilder<SuperState, SuperEvent> transition: @Sendable @escaping (S, E) async
+      -> MealyTransition<SuperState, SuperEvent>
+  ) {
+    self.init(event: event.type, guard: `guard`, transition: transition)
+  }
+
   /// Creates a ``On`` block given a set of possible ``Event``s and a Mealy transition gated by a `guard` statement.
   ///
   /// ```
@@ -96,6 +109,28 @@ public struct On<S, SuperState, SuperEvent>: Sendable {
     async -> MealyTransition<SuperState, SuperEvent>
   ) {
     let oneOfEvents = OneOfEvents(events)
+    self.oneOfEvents = oneOfEvents
+    mealyTransition = { state, anyEvent in
+      guard await `guard`(state, anyEvent) else { return nil }
+      guard oneOfEvents.contains(event: anyEvent) else { return nil }
+      return await transition(state, anyEvent)
+    }
+  }
+
+  /// Creates an ``On`` block from contextual event references.
+  ///
+  /// Grouped routes intentionally erase their concrete event type, matching
+  /// the existing `events:` initializer while enabling
+  /// `On(events: .loadingWasRequested, .reloadingWasRequested)`.
+  public init(
+    events: EventSetType<SuperEvent>...,
+    guard: @Sendable @escaping (S, any Event<SuperEvent>) async -> Bool = { _, _ in true },
+    @MealyTransitionBuilder<SuperState, SuperEvent> transition: @Sendable @escaping (
+      S,
+      any Event<SuperEvent>
+    ) async -> MealyTransition<SuperState, SuperEvent>
+  ) {
+    let oneOfEvents = OneOfEvents(events.map(\.type))
     self.oneOfEvents = oneOfEvents
     mealyTransition = { state, anyEvent in
       guard await `guard`(state, anyEvent) else { return nil }

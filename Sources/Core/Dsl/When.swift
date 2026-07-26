@@ -57,6 +57,17 @@ public struct When<SuperState, SuperEvent> {
     }
   }
 
+  /// Creates a ``When`` block from a strongly typed state reference.
+  ///
+  /// This preserves the same typed builder and runtime semantics as the
+  /// metatype initializer while enabling `When(state: .isLoading)`.
+  public init<S: State<SuperState>>(
+    state: StateType<S>,
+    @WhenBuilder<S, SuperState, SuperEvent> builder: () -> [WhenComponent<S, SuperState, SuperEvent>]
+  ) {
+    self.init(state: state.type, builder: builder)
+  }
+
   /// Creates a ``When`` block given a set of possible ``States``s
   /// and a list of ``On`` blocks that stand for every available Mealy transitions.
   ///
@@ -138,6 +149,45 @@ public struct When<SuperState, SuperEvent> {
       -> [WhenComponent<any State<SuperState>, SuperState, SuperEvent>]
   ) {
     let oneOfStates = OneOfStates(states)
+    self.oneOfStates = oneOfStates
+    let components = transitions()
+    let ons = components.compactMap { component -> On<any State<SuperState>, SuperState, SuperEvent>? in
+      if case let .on(on) = component { return on }
+      return nil
+    }
+    let composites = components.compactMap { component -> AnyCompositeDefinition<SuperState, SuperEvent>? in
+      if case let .composite(composite) = component { return composite }
+      return nil
+    }
+    if !composites.isEmpty {
+      precondition(
+        oneOfStates.states.count == 1,
+        "Composite can only be used with a single state in a When block."
+      )
+    }
+    compositeDefinitions = composites
+    mealyTransitions = ons.map { on in
+      let oneOfEvents = on.oneOfEvents
+      let mealyTransition: @Sendable (AnyState, AnyEvent) async
+        -> MealyTransition<SuperState, SuperEvent>? = { anyState, anyEvent in
+          guard oneOfStates.contains(state: anyState) else { return nil }
+          return await on.mealyTransition(anyState, anyEvent)
+        }
+      return (oneOfEvents, mealyTransition)
+    }
+  }
+
+  /// Creates a ``When`` block from contextual state references.
+  ///
+  /// Grouped routes intentionally erase their concrete state type, matching
+  /// the existing `states:` initializer while enabling
+  /// `When(states: .isIdle, .isLoaded)`.
+  public init(
+    states: StateSetType<SuperState>...,
+    @WhenBuilder<any State<SuperState>, SuperState, SuperEvent> transitions: ()
+      -> [WhenComponent<any State<SuperState>, SuperState, SuperEvent>]
+  ) {
+    let oneOfStates = OneOfStates(states.map(\.type))
     self.oneOfStates = oneOfStates
     let components = transitions()
     let ons = components.compactMap { component -> On<any State<SuperState>, SuperState, SuperEvent>? in

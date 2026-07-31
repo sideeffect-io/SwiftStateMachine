@@ -21,7 +21,7 @@ public typealias LogFunction = @Sendable (
 // MARK: Internal
 
 /// default ooutput for logs is Apple Unified Logging system
-let osLogger = os.Logger(subsystem: "com.touchtunes", category: "StateMachine")
+let osLogger = os.Logger(subsystem: "io.sideeffect", category: "StateMachine")
 
 let logger: SendableStorage<LogFunction> = SendableStorage(value: { @Sendable title, currentState, event, newState in
   let currentStateStr = String(describing: currentState)

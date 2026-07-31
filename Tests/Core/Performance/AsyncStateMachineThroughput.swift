@@ -16,7 +16,7 @@ Sendable {
   ) throws -> [XCTPerformanceMeasurement] {
     [
       XCTPerformanceMeasurement(
-        identifier: "com.touchtunes",
+        identifier: "io.sideeffect",
         displayName: "Throughput",
         doubleValue: Double(eventCount) /
           (endTime.date.timeIntervalSinceReferenceDate - startTime.date.timeIntervalSinceReferenceDate),

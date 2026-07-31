@@ -79,9 +79,7 @@ the command remains ordered in the machine and continues under normal output
 supervision.
 
 ## Contribution
-Contributions are always welcome. To ensure conformance to our [style guidelines](https://touchtunes.atlassian.net/wiki/spaces/PROJECTS/pages/31686967/iOS+Guidelines) and prevent breaking modifications, the project uses specific tooling in the form of linting and formatting tools, as well as git hooks.
-
-Before contributing, please make sure you have run the configuration script to install them.
+Contributions are always welcome. Before contributing, please make sure you have run the configuration script to install them.
 
 If this is not possible at the moment, please follow the below instructions:
 1. Install the latest version of [SwiftLint](https://github.com/realm/SwiftLint)
@@ -127,8 +125,6 @@ Here is a diagram describing a simple state machine:
 - The elevator can go from one state to another when events are received. _This is the finite set of possible **transitions**._
 
 The assumption we make is that almost any feature can be described in terms of state machines. And to make it as simple as possible, we use a Domain Specific Language.
-
-You can read the naming convention for states and events [here](https://touchtunes.atlassian.net/wiki/spaces/PROJECTS/pages/35487815/Naming+conventions).
 
 # DSL
 

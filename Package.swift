@@ -33,7 +33,7 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/pointfreeco/xctest-dynamic-overlay.git", exact: "1.4.2"),
-    .package(url: "https://github.com/apple/swift-collections.git", exact: "1.1.4")
+    .package(url: "https://github.com/apple/swift-collections.git", exact: "1.5.1")
   ],
   targets: [
     // Enable strict concurrency diagnostics in Debug to surface Sendable and isolation issues early.
